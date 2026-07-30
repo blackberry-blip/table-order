@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase";
 import {
   collection,
@@ -13,14 +14,18 @@ import {
   orderBy,
 } from "firebase/firestore";
 
-export default function TablePage() {
-  const [tableNo, setTableNo] = useState(null);
+function TableContent() {
+  const searchParams = useSearchParams();
+  const tableParam = searchParams.get("table");
+
+  const [tableNo, setTableNo] = useState(tableParam ? parseInt(tableParam) : null);
   const [order, setOrder] = useState(null);
   const [cart, setCart] = useState({});
   const [addingMore, setAddingMore] = useState(false);
   const [tick, setTick] = useState(0);
   const [profile, setProfile] = useState(null);
   const [menuItems, setMenuItems] = useState([]);
+  const [tables, setTables] = useState([]);
 
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 1000);
@@ -43,12 +48,20 @@ export default function TablePage() {
   }, []);
 
   useEffect(() => {
+    const q = query(collection(db, "tables"), orderBy("number", "asc"));
+    const unsub = onSnapshot(q, (snap) => {
+      setTables(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
     if (!tableNo) return;
     const q = query(collection(db, "orders"), where("table", "==", tableNo));
     const unsub = onSnapshot(q, (snap) => {
       const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const activeOrder = all
-        .filter((o) => o.status !== "served")
+        .filter((o) => o.status !== "paid")
         .sort((a, b) => b.createdAt - a.createdAt)[0];
       setOrder(activeOrder || null);
     });
@@ -113,6 +126,10 @@ export default function TablePage() {
     setAddingMore(false);
   }
 
+  async function requestBill() {
+    await updateDoc(doc(db, "orders", order.id), { status: "bill_requested" });
+  }
+
   function getCountdown(o) {
     if (o.status !== "preparing" || !o.etaMinutes || !o.preparingAt) return null;
     const totalSeconds = o.etaMinutes * 60;
@@ -136,16 +153,17 @@ export default function TablePage() {
     </div>
   );
 
-  // ---------- Table picker ----------
+  // ---------- Table picker (only shown if no ?table= in the URL) ----------
   if (!tableNo) {
     return (
       <div style={{ maxWidth: 480, margin: "0 auto", padding: 20, fontFamily: "sans-serif" }}>
         <Header />
         <h2>Which table are you at?</h2>
+        {tables.length === 0 && <p style={{ color: "#888" }}>No tables set up yet.</p>}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 8 }}>
-          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-            <button key={n} onClick={() => setTableNo(n)} style={{ padding: 16, fontSize: 16 }}>
-              {n}
+          {tables.map((t) => (
+            <button key={t.id} onClick={() => setTableNo(t.number)} style={{ padding: 16, fontSize: 16 }}>
+              {t.number}
             </button>
           ))}
         </div>
@@ -153,45 +171,119 @@ export default function TablePage() {
     );
   }
 
+  // ---------- Bill screen ----------
+  if (order && (order.status === "billed" || order.status === "bill_requested")) {
+    return (
+      <div style={{ maxWidth: 480, margin: "0 auto", padding: 20, fontFamily: "sans-serif" }}>
+        <Header />
+        <h2>Table {order.table} · Bill</h2>
+
+        {order.status === "bill_requested" && (
+          <div style={{ background: "#F1EBDD", borderRadius: 12, padding: 18, marginBottom: 16, textAlign: "center" }}>
+            Bill requested — the front desk is preparing it now.
+          </div>
+        )}
+
+        {order.status === "billed" && (
+          <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 18 }}>
+            {order.items.map((it, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 14 }}>
+                <span>{it.name} ×{it.qty}</span>
+                <span>₹{it.price * it.qty}</span>
+              </div>
+            ))}
+            <div style={{ borderTop: "1px dashed #ccc", marginTop: 10, paddingTop: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                <span>Subtotal</span>
+                <span>₹{order.billSubtotal}</span>
+              </div>
+              {order.billTaxAmount > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: "#888" }}>
+                  <span>Tax ({order.billTaxPercent}%)</span>
+                  <span>₹{order.billTaxAmount}</span>
+                </div>
+              )}
+              {order.billServiceAmount > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: "#888" }}>
+                  <span>Service ({order.billServicePercent}%)</span>
+                  <span>₹{order.billServiceAmount}</span>
+                </div>
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 700, marginTop: 8 }}>
+                <span>Total</span>
+                <span>₹{order.billTotal}</span>
+              </div>
+            </div>
+            <div style={{ marginTop: 14, textAlign: "center", fontSize: 13, color: "#888" }}>
+              Awaiting payment — pay at the counter or with staff.
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // ---------- Status screen ----------
-  if (order && !addingMore) {
+  if (order) {
     const words = {
       pending: "Sent to the counter",
       confirmed: "Confirmed — heading to kitchen",
       preparing: "Being cooked",
       ready: "Ready — on its way to your table",
+      served: "Served. Enjoy!",
     };
     const countdown = getCountdown(order);
 
-    return (
-      <div style={{ maxWidth: 480, margin: "0 auto", padding: 20, fontFamily: "sans-serif" }}>
-        <Header />
-        <h2>Table {order.table}</h2>
-        <div style={{ background: "#1C1B1A", color: "#fff", borderRadius: 12, padding: 20 }}>
-          <div style={{ fontSize: 22, fontWeight: 600 }}>{words[order.status]}</div>
-          {order.status === "preparing" && countdown && (
-            <div style={{ fontSize: 38, marginTop: 10, fontFamily: "monospace" }}>
-              {countdown}
+    if (!addingMore) {
+      return (
+        <div style={{ maxWidth: 480, margin: "0 auto", padding: 20, fontFamily: "sans-serif" }}>
+          <Header />
+          <h2>Table {order.table}</h2>
+          <div style={{ background: "#1C1B1A", color: "#fff", borderRadius: 12, padding: 20 }}>
+            <div style={{ fontSize: 22, fontWeight: 600 }}>{words[order.status]}</div>
+            {order.status === "preparing" && countdown && (
+              <div style={{ fontSize: 38, marginTop: 10, fontFamily: "monospace" }}>
+                {countdown}
+              </div>
+            )}
+          </div>
+
+          <h3 style={{ marginTop: 20 }}>Your order</h3>
+          {order.items.map((it, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0" }}>
+              <span>{it.name}</span>
+              <span>×{it.qty}</span>
+            </div>
+          ))}
+
+          {order.status !== "served" && (
+            <button
+              onClick={() => setAddingMore(true)}
+              style={{ marginTop: 20, width: "100%", padding: 14, background: "#fff", color: "#1C1B1A", border: "1px solid #1C1B1A", borderRadius: 10 }}
+            >
+              + Add more items
+            </button>
+          )}
+
+          {order.status === "served" && (
+            <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
+              <button
+                onClick={() => setAddingMore(true)}
+                style={{ width: "100%", padding: 14, background: "#fff", color: "#1C1B1A", border: "1px solid #1C1B1A", borderRadius: 10 }}
+              >
+                + Add more items
+              </button>
+              <button
+                onClick={requestBill}
+                style={{ width: "100%", padding: 14, background: "#E8A33D", color: "#1C1B1A", border: "none", borderRadius: 10, fontWeight: 600 }}
+              >
+                Request bill
+              </button>
             </div>
           )}
         </div>
-
-        <h3 style={{ marginTop: 20 }}>Your order</h3>
-        {order.items.map((it, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0" }}>
-            <span>{it.name}</span>
-            <span>×{it.qty}</span>
-          </div>
-        ))}
-
-        <button
-          onClick={() => setAddingMore(true)}
-          style={{ marginTop: 20, width: "100%", padding: 14, background: "#fff", color: "#1C1B1A", border: "1px solid #1C1B1A", borderRadius: 10 }}
-        >
-          + Add more items
-        </button>
-      </div>
-    );
+      );
+    }
   }
 
   // ---------- Menu ----------
@@ -249,5 +341,13 @@ export default function TablePage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function TablePage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 20 }}>Loading...</div>}>
+      <TableContent />
+    </Suspense>
   );
 }

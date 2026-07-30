@@ -32,6 +32,13 @@ export default function ReceptionPage() {
   const [billingForm, setBillingForm] = useState({ taxPercent: 5, servicePercent: 0 });
   const [billingSaved, setBillingSaved] = useState(false);
 
+  const [tables, setTables] = useState([]);
+  const [siteUrl, setSiteUrl] = useState("");
+
+  useEffect(() => {
+    setSiteUrl(window.location.origin);
+  }, []);
+
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 1000);
     return () => clearInterval(t);
@@ -69,6 +76,14 @@ export default function ReceptionPage() {
     const q = query(collection(db, "menuItems"), orderBy("createdAt", "asc"));
     const unsub = onSnapshot(q, (snap) => {
       setMenuItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, "tables"), orderBy("number", "asc"));
+    const unsub = onSnapshot(q, (snap) => {
+      setTables(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
     return () => unsub();
   }, []);
@@ -123,6 +138,53 @@ export default function ReceptionPage() {
     await updateDoc(doc(db, "orders", id), { status: "paid" });
   }
 
+  function printBill(o) {
+    const itemsHtml = o.items
+      .map(
+        (it) => `
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:14px;">
+          <span>${it.name} ×${it.qty}</span>
+          <span>₹${it.price * it.qty}</span>
+        </div>`
+      )
+      .join("");
+
+    const html = `
+      <html>
+      <head>
+        <title>Bill - Table ${o.table}</title>
+        <style>
+          body { font-family: monospace; max-width: 320px; margin: 20px auto; color: #111; }
+          h2 { text-align: center; margin-bottom: 0; }
+          .sub { text-align: center; font-size: 12px; color: #555; margin-bottom: 16px; }
+          .line { border-top: 1px dashed #999; margin: 10px 0; }
+          .row { display: flex; justify-content: space-between; font-size: 14px; padding: 3px 0; }
+          .total { font-size: 18px; font-weight: bold; margin-top: 8px; }
+        </style>
+      </head>
+      <body>
+        <h2>${profile?.name || "Table Order"}</h2>
+        <div class="sub">${profile?.tagline || ""}</div>
+        <div class="sub">Table ${o.table} · ${new Date(o.createdAt).toLocaleString()}</div>
+        <div class="line"></div>
+        ${itemsHtml}
+        <div class="line"></div>
+        <div class="row"><span>Subtotal</span><span>₹${o.billSubtotal}</span></div>
+        ${o.billTaxAmount > 0 ? `<div class="row"><span>Tax (${o.billTaxPercent}%)</span><span>₹${o.billTaxAmount}</span></div>` : ""}
+        ${o.billServiceAmount > 0 ? `<div class="row"><span>Service (${o.billServicePercent}%)</span><span>₹${o.billServiceAmount}</span></div>` : ""}
+        <div class="line"></div>
+        <div class="row total"><span>Total</span><span>₹${o.billTotal}</span></div>
+        <div class="sub" style="margin-top:20px;">Thank you!</div>
+        <script>window.onload = () => window.print();</script>
+      </body>
+      </html>
+    `;
+
+    const win = window.open("", "_blank", "width=400,height=600");
+    win.document.write(html);
+    win.document.close();
+  }
+
   async function addMenuItem() {
     if (!newItem.name || !newItem.price) return alert("Name and price are required");
     await addDoc(collection(db, "menuItems"), {
@@ -157,6 +219,42 @@ export default function ReceptionPage() {
   async function deleteItem(id) {
     if (!confirm("Delete this item?")) return;
     await deleteDoc(doc(db, "menuItems", id));
+  }
+
+  async function addTable() {
+    const nextNumber = tables.length > 0 ? Math.max(...tables.map((t) => t.number)) + 1 : 1;
+    await addDoc(collection(db, "tables"), { number: nextNumber, createdAt: Date.now() });
+  }
+
+  async function deleteTable(id) {
+    if (!confirm("Delete this table? Its QR code will stop working.")) return;
+    await deleteDoc(doc(db, "tables", id));
+  }
+
+  function qrUrlFor(tableNumber) {
+    const link = `${siteUrl}/table?table=${tableNumber}`;
+    return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(link)}`;
+  }
+
+  function printQr(tableNumber) {
+    const link = `${siteUrl}/table?table=${tableNumber}`;
+    const imgUrl = qrUrlFor(tableNumber);
+    const html = `
+      <html>
+      <head><title>Table ${tableNumber} QR</title></head>
+      <body style="text-align:center;font-family:sans-serif;margin-top:40px;">
+        <h2>Table ${tableNumber}</h2>
+        <img src="${imgUrl}" style="width:260px;height:260px;" />
+        <p style="font-size:12px;color:#888;word-break:break-all;">${link}</p>
+        <script>
+          window.onload = () => setTimeout(() => window.print(), 400);
+        </script>
+      </body>
+      </html>
+    `;
+    const win = window.open("", "_blank", "width=400,height=500");
+    win.document.write(html);
+    win.document.close();
   }
 
   function getCountdown(o) {
@@ -194,6 +292,34 @@ export default function ReceptionPage() {
           <button onClick={saveProfile} style={{ padding: 10, background: "#1C1B1A", color: "#fff", border: "none", borderRadius: 8 }}>
             {savedMsg ? "Saved ✓" : "Save profile"}
           </button>
+        </div>
+      </details>
+
+      <details style={{ marginBottom: 16, border: "1px solid #ddd", borderRadius: 10, padding: 14 }} suppressHydrationWarning>
+        <summary style={{ fontWeight: 600, cursor: "pointer" }}>Tables & QR codes ({tables.length})</summary>
+        <div style={{ marginTop: 12 }}>
+          <button onClick={addTable} style={{ width: "100%", padding: 10, background: "#1C1B1A", color: "#fff", border: "none", borderRadius: 8, marginBottom: 12 }}>
+            + Add new table
+          </button>
+          {tables.length === 0 && <p style={{ color: "#888", fontSize: 13 }}>No tables yet — add one to generate its QR code.</p>}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {tables.map((t) => (
+              <div key={t.id} style={{ border: "1px solid #eee", borderRadius: 8, padding: 10, textAlign: "center" }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Table {t.number}</div>
+                {siteUrl && (
+                  <img src={qrUrlFor(t.number)} alt={`QR table ${t.number}`} style={{ width: "100%", maxWidth: 140, margin: "0 auto" }} />
+                )}
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button onClick={() => printQr(t.number)} style={{ flex: 1, fontSize: 11, padding: 6, background: "#fff", border: "1px solid #1C1B1A", borderRadius: 6 }}>
+                    Print
+                  </button>
+                  <button onClick={() => deleteTable(t.id)} style={{ flex: 1, fontSize: 11, padding: 6, background: "#fff", color: "#C1440E", border: "1px solid #C1440E", borderRadius: 6 }}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </details>
 
@@ -356,10 +482,43 @@ export default function ReceptionPage() {
       {billed.length === 0 && <p style={{ color: "#888" }}>Nothing awaiting payment.</p>}
       {billed.map((o) => (
         <div key={o.id} style={{ border: "1px solid #eee", borderRadius: 10, padding: 14, marginBottom: 12 }}>
-          <div style={{ fontWeight: 600 }}>Table {o.table} · ₹{o.billTotal}</div>
-          <button onClick={() => markPaid(o.id)} style={{ marginTop: 10, width: "100%", padding: 10, background: "#4C7A4A", color: "#fff", border: "none", borderRadius: 8 }}>
-            Mark as paid
-          </button>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Table {o.table}</div>
+          {o.items.map((it, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+              <span>{it.name} ×{it.qty}</span>
+              <span>₹{it.price * it.qty}</span>
+            </div>
+          ))}
+          <div style={{ borderTop: "1px dashed #ccc", marginTop: 8, paddingTop: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span>Subtotal</span>
+              <span>₹{o.billSubtotal}</span>
+            </div>
+            {o.billTaxAmount > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#888" }}>
+                <span>Tax ({o.billTaxPercent}%)</span>
+                <span>₹{o.billTaxAmount}</span>
+              </div>
+            )}
+            {o.billServiceAmount > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#888" }}>
+                <span>Service ({o.billServicePercent}%)</span>
+                <span>₹{o.billServiceAmount}</span>
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 16, marginTop: 6 }}>
+              <span>Total</span>
+              <span>₹{o.billTotal}</span>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={() => printBill(o)} style={{ flex: 1, padding: 10, background: "#fff", color: "#1C1B1A", border: "1px solid #1C1B1A", borderRadius: 8 }}>
+              🖨 Print bill
+            </button>
+            <button onClick={() => markPaid(o.id)} style={{ flex: 1, padding: 10, background: "#4C7A4A", color: "#fff", border: "none", borderRadius: 8 }}>
+              Mark as paid
+            </button>
+          </div>
         </div>
       ))}
     </div>
