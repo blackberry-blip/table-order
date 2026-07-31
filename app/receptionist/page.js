@@ -26,7 +26,7 @@ const TABS = [
 ];
 
 export default function ReceptionPage() {
-  // === ALL useState FIRST ===
+  // === ALL useState declarations FIRST ===
   const [activeTab, setActiveTab] = useState("dashboard");
   const [orderFilter, setOrderFilter] = useState("pending");
   const [orders, setOrders] = useState([]);
@@ -49,7 +49,7 @@ export default function ReceptionPage() {
   const [lastBillCount, setLastBillCount] = useState(0);
   const [notifPermission, setNotifPermission] = useState(false);
 
-  // === ALL useEffects that DON'T depend on computed values SECOND ===
+  // === useEffects that don't depend on computed values ===
   useEffect(() => {
     setSiteUrl(window.location.origin);
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -111,7 +111,7 @@ export default function ReceptionPage() {
     requestNotificationPermission().then(setNotifPermission);
   }, []);
 
-  // === ALL computed/filtered values THIRD ===
+  // === ALL computed/filtered values ===
   const pending = orders.filter((o) => o.status === "pending");
   const active = orders.filter((o) => ["confirmed", "preparing", "ready"].includes(o.status));
   const served = orders.filter((o) => o.status === "served");
@@ -119,7 +119,7 @@ export default function ReceptionPage() {
   const billed = orders.filter((o) => o.status === "billed");
   const paid = orders.filter((o) => o.status === "paid");
 
-  // === useEffects that DEPEND on computed values FOURTH ===
+  // === useEffects that DEPEND on computed values ===
   useEffect(() => {
     if (pending.length > lastPendingCount && lastPendingCount > 0) {
       playNotificationSound("newOrder");
@@ -130,7 +130,7 @@ export default function ReceptionPage() {
       );
     }
     setLastPendingCount(pending.length);
-  }, [pending.length]);
+  }, [pending.length, lastPendingCount]);
 
   useEffect(() => {
     if (billRequested.length > lastBillCount && lastBillCount > 0) {
@@ -142,8 +142,9 @@ export default function ReceptionPage() {
       );
     }
     setLastBillCount(billRequested.length);
-  }, [billRequested.length]);
+  }, [billRequested.length, lastBillCount]);
 
+  // === ALL functions ===
   async function confirmOrder(id) {
     await updateDoc(doc(db, "orders", id), { status: "confirmed" });
   }
@@ -332,6 +333,7 @@ export default function ReceptionPage() {
     return `${m}:${s.toString().padStart(2, "0")}`;
   }
 
+  // === STYLES & COMPONENTS ===
   const inputStyle = { width: "100%", padding: "10px 12px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 14, marginBottom: 10, background: "var(--surface)", fontFamily: "inherit" };
 
   const StatCard = ({ label, value, color, icon }) => (
@@ -347,7 +349,7 @@ export default function ReceptionPage() {
   );
 
   const OrderCard = ({ order, children }) => (
-    <div className="card" style={{ padding: 16, marginBottom: 12,}}>
+    <div className="card" style={{ padding: 16, marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontWeight: 700, fontSize: 16 }}>Table {order.table}</span>
@@ -380,6 +382,7 @@ export default function ReceptionPage() {
     </div>
   );
 
+  // === RENDER METHODS ===
   const renderDashboard = () => (
     <div>
       <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 24 }}>Dashboard</h2>
@@ -420,145 +423,127 @@ export default function ReceptionPage() {
   );
 
   const renderOrders = () => {
-  const orderSections = [
-    { key: "pending", label: "Pending", count: pending.length, color: "#f59e0b", data: pending, emptyMsg: "No new orders waiting." },
-    { key: "active", label: "In Progress", count: active.length, color: "#3b82f6", data: active, emptyMsg: "Nothing in the kitchen right now." },
-    { key: "served", label: "Served", count: served.length, color: "#6b7280", data: served, emptyMsg: "No tables waiting on a bill." },
-    { key: "billRequested", label: "Bill Requests", count: billRequested.length, color: "#e8a33d", data: billRequested, emptyMsg: "No bills requested." },
-    { key: "billed", label: "Awaiting Payment", count: billed.length, color: "#8b5cf6", data: billed, emptyMsg: "Nothing awaiting payment." },
-  ];
+    const orderSections = [
+      { key: "pending", label: "Pending", count: pending.length, color: "#f59e0b", data: pending, emptyMsg: "No new orders waiting." },
+      { key: "active", label: "In Progress", count: active.length, color: "#3b82f6", data: active, emptyMsg: "Nothing in the kitchen right now." },
+      { key: "served", label: "Served", count: served.length, color: "#6b7280", data: served, emptyMsg: "No tables waiting on a bill." },
+      { key: "billRequested", label: "Bill Requests", count: billRequested.length, color: "#e8a33d", data: billRequested, emptyMsg: "No bills requested." },
+      { key: "billed", label: "Awaiting Payment", count: billed.length, color: "#8b5cf6", data: billed, emptyMsg: "Nothing awaiting payment." },
+    ];
 
-  const currentSection = orderSections.find((s) => s.key === orderFilter);
+    const currentSection = orderSections.find((s) => s.key === orderFilter);
 
-  return (
-    <div>
-      <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 20 }}>Orders</h2>
+    return (
+      <div>
+        <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 20 }}>Orders</h2>
 
-      {/* Horizontal Tabs */}
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          overflowX: "auto",
-          paddingBottom: 4,
-          marginBottom: 24,
-          borderBottom: "2px solid var(--border)",
-        }}
-      >
-        {orderSections.map((section) => (
-          <button
-            key={section.key}
-            onClick={() => setOrderFilter(section.key)}
-            style={{
-              padding: "12px 18px",
-              borderRadius: "10px 10px 0 0",
-              border: "none",
-              borderBottom: orderFilter === section.key ? `3px solid ${section.color}` : "3px solid transparent",
-              background: orderFilter === section.key ? `${section.color}10` : "transparent",
-              color: orderFilter === section.key ? section.color : "var(--text-secondary)",
-              fontSize: 14,
-              fontWeight: 600,
-              whiteSpace: "nowrap",
-              cursor: "pointer",
-              transition: "all 0.15s ease",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-            }}
-          >
-            {section.label}
-            <span
+        {/* Horizontal Tabs */}
+        <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4, marginBottom: 24, borderBottom: "2px solid var(--border)" }}>
+          {orderSections.map((section) => (
+            <button
+              key={section.key}
+              onClick={() => setOrderFilter(section.key)}
               style={{
-                background: orderFilter === section.key ? section.color : "var(--surface-2)",
-                color: orderFilter === section.key ? "#fff" : "var(--text-secondary)",
-                padding: "1px 8px",
-                borderRadius: 100,
-                fontSize: 12,
-                fontWeight: 700,
+                padding: "12px 18px",
+                borderRadius: "10px 10px 0 0",
+                border: "none",
+                borderBottom: orderFilter === section.key ? `3px solid ${section.color}` : "3px solid transparent",
+                background: orderFilter === section.key ? `${section.color}10` : "transparent",
+                color: orderFilter === section.key ? section.color : "var(--text-secondary)",
+                fontSize: 14,
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+                cursor: "pointer",
+                transition: "all 0.15s ease",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
               }}
             >
-              {section.count}
-            </span>
-          </button>
-        ))}
-      </div>
+              {section.label}
+              <span style={{ background: orderFilter === section.key ? section.color : "var(--surface-2)", color: orderFilter === section.key ? "#fff" : "var(--text-secondary)", padding: "1px 8px", borderRadius: 100, fontSize: 12, fontWeight: 700 }}>
+                {section.count}
+              </span>
+            </button>
+          ))}
+        </div>
 
-      {/* Tab Content */}
-      <div>
-        {currentSection.data.length === 0 ? (
-          <div className="card" style={{ padding: 48, textAlign: "center", color: "var(--text-secondary)" }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
-            <p>{currentSection.emptyMsg}</p>
-          </div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-            {currentSection.key === "pending" && currentSection.data.map((o) => (
-              <OrderCard key={o.id} order={o}>
-                <button className="btn btn-sm btn-danger" onClick={() => declineOrder(o.id)} style={{ flex: 1 }}>Decline</button>
-                <button className="btn btn-sm btn-primary" onClick={() => confirmOrder(o.id)} style={{ flex: 1 }}>Confirm → Kitchen</button>
-              </OrderCard>
-            ))}
+        {/* Tab Content */}
+        <div>
+          {currentSection.data.length === 0 ? (
+            <div className="card" style={{ padding: 48, textAlign: "center", color: "var(--text-secondary)" }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
+              <p>{currentSection.emptyMsg}</p>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+              {currentSection.key === "pending" && currentSection.data.map((o) => (
+                <OrderCard key={o.id} order={o}>
+                  <button className="btn btn-sm btn-danger" onClick={() => declineOrder(o.id)} style={{ flex: 1 }}>Decline</button>
+                  <button className="btn btn-sm btn-primary" onClick={() => confirmOrder(o.id)} style={{ flex: 1 }}>Confirm → Kitchen</button>
+                </OrderCard>
+              ))}
 
-            {currentSection.key === "active" && currentSection.data.map((o) => (
-              <OrderCard key={o.id} order={o}>
-                {o.status === "ready" && (
-                  <button className="btn btn-sm btn-success" onClick={() => markServed(o.id)} style={{ width: "100%" }}>Mark as Served</button>
-                )}
-              </OrderCard>
-            ))}
-
-            {currentSection.key === "served" && currentSection.data.map((o) => (
-              <OrderCard key={o.id} order={o} />
-            ))}
-
-            {currentSection.key === "billRequested" && currentSection.data.map((o) => (
-              <OrderCard key={o.id} order={o}>
-                <button className="btn btn-sm btn-primary" onClick={() => generateBill(o)} style={{ width: "100%" }}>Generate Bill</button>
-              </OrderCard>
-            ))}
-
-            {currentSection.key === "billed" && currentSection.data.map((o) => (
-              <div key={o.id} className="card" style={{ padding: 16, marginBottom: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <span style={{ fontWeight: 700 }}>Table {o.table}</span>
-                  <span className="badge badge-billed">billed</span>
-                </div>
-                {o.items.map((it, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 14, padding: "3px 0" }}>
-                    <span>{it.name} ×{it.qty}</span>
-                    <span>₹{it.price * it.qty}</span>
-                  </div>
-                ))}
-                <div style={{ borderTop: "1px dashed var(--border)", marginTop: 10, paddingTop: 10 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--text-secondary)" }}>
-                    <span>Subtotal</span><span>₹{o.billSubtotal}</span>
-                  </div>
-                  {o.billTaxAmount > 0 && (
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--text-secondary)" }}>
-                      <span>Tax ({o.billTaxPercent}%)</span><span>₹{o.billTaxAmount}</span>
-                    </div>
+              {currentSection.key === "active" && currentSection.data.map((o) => (
+                <OrderCard key={o.id} order={o}>
+                  {o.status === "ready" && (
+                    <button className="btn btn-sm btn-success" onClick={() => markServed(o.id)} style={{ width: "100%" }}>Mark as Served</button>
                   )}
-                  {o.billServiceAmount > 0 && (
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--text-secondary)" }}>
-                      <span>Service ({o.billServicePercent}%)</span><span>₹{o.billServiceAmount}</span>
+                </OrderCard>
+              ))}
+
+              {currentSection.key === "served" && currentSection.data.map((o) => (
+                <OrderCard key={o.id} order={o} />
+              ))}
+
+              {currentSection.key === "billRequested" && currentSection.data.map((o) => (
+                <OrderCard key={o.id} order={o}>
+                  <button className="btn btn-sm btn-primary" onClick={() => generateBill(o)} style={{ width: "100%" }}>Generate Bill</button>
+                </OrderCard>
+              ))}
+
+              {currentSection.key === "billed" && currentSection.data.map((o) => (
+                <div key={o.id} className="card" style={{ padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <span style={{ fontWeight: 700 }}>Table {o.table}</span>
+                    <span className="badge badge-billed">billed</span>
+                  </div>
+                  {o.items.map((it, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 14, padding: "3px 0" }}>
+                      <span>{it.name} ×{it.qty}</span>
+                      <span>₹{it.price * it.qty}</span>
                     </div>
-                  )}
-                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 16, marginTop: 6 }}>
-                    <span>Total</span><span>₹{o.billTotal}</span>
+                  ))}
+                  <div style={{ borderTop: "1px dashed var(--border)", marginTop: 10, paddingTop: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--text-secondary)" }}>
+                      <span>Subtotal</span><span>₹{o.billSubtotal}</span>
+                    </div>
+                    {o.billTaxAmount > 0 && (
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--text-secondary)" }}>
+                        <span>Tax ({o.billTaxPercent}%)</span><span>₹{o.billTaxAmount}</span>
+                      </div>
+                    )}
+                    {o.billServiceAmount > 0 && (
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--text-secondary)" }}>
+                        <span>Service ({o.billServicePercent}%)</span><span>₹{o.billServiceAmount}</span>
+                      </div>
+                    )}
+                    <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 16, marginTop: 6 }}>
+                      <span>Total</span><span>₹{o.billTotal}</span>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <button className="btn btn-sm btn-ghost" onClick={() => printBill(o)} style={{ flex: 1 }}>🖨 Print</button>
+                    <button className="btn btn-sm btn-success" onClick={() => markPaid(o.id)} style={{ flex: 1 }}>Mark Paid</button>
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                  <button className="btn btn-sm btn-ghost" onClick={() => printBill(o)} style={{ flex: 1 }}>🖨 Print</button>
-                  <button className="btn btn-sm btn-success" onClick={() => markPaid(o.id)} style={{ flex: 1 }}>Mark Paid</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  );
-};
+    );
+  };
 
   const renderMenu = () => (
     <div>
@@ -700,14 +685,13 @@ export default function ReceptionPage() {
     </div>
   );
 
+  // === RETURN ===
   return (
     <div style={{ display: "flex", minHeight: "100vh", fontFamily: "sans-serif" }}>
-      {/* Mobile overlay */}
       {isMobile && sidebarOpen && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 99 }} onClick={() => setSidebarOpen(false)} />
       )}
 
-      {/* Sidebar */}
       <aside
         className="no-print"
         style={{
@@ -765,9 +749,7 @@ export default function ReceptionPage() {
         </div>
       </aside>
 
-      {/* Main Content */}
       <main style={{ marginLeft: isMobile ? 0 : 260, flex: 1, background: "var(--bg)", minHeight: "100vh", width: "100%" }}>
-        {/* Mobile Header */}
         {isMobile && (
           <div className="no-print" style={{ padding: "16px 20px", background: "#1a1a2e", color: "#fff", display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={() => setSidebarOpen(true)} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>
