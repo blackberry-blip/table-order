@@ -271,6 +271,9 @@ export default function ReceptionPage() {
   async function toggleAvailable(item) {
     await updateDoc(doc(db, "menuItems", item.id), { available: !item.available });
   }
+  async function toggleFeatured(item) {
+  await updateDoc(doc(db, "menuItems", item.id), { featured: !item.featured });
+  }
   async function deleteItem(id) {
     if (!confirm("Delete this item?")) return;
     await deleteDoc(doc(db, "menuItems", id));
@@ -594,17 +597,30 @@ export default function ReceptionPage() {
                       </div>
                     ) : (
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                        <div>
-                          <div style={{ fontWeight: 700, fontSize: 15, opacity: item.available ? 1 : 0.5 }}>{item.name}</div>
-                          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>₹{item.price} · {item.description}</div>
-                        </div>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button className="btn btn-sm" onClick={() => toggleAvailable(item)} style={{ background: item.available ? "var(--success-light)" : "var(--warning-light)", color: item.available ? "#166534" : "#92400e", border: "none" }}>
-                            {item.available ? "Available" : "Out of Stock"}
-                          </button>
-                          <button className="btn btn-sm btn-ghost" onClick={() => startEdit(item)}>Edit</button>
-                          <button className="btn btn-sm btn-ghost" onClick={() => deleteItem(item.id)} style={{ color: "var(--danger)" }}>Delete</button>
-                        </div>
+                         <div>
+                            <div style={{ fontWeight: 700, fontSize: 15, opacity: item.available ? 1 : 0.5 }}>{item.name}</div>
+                            <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>₹{item.price} · {item.description}</div>
+                          </div>
+                          <div style={{ display: "flex", gap: 6 }}>
+                               {/* ⭐ FEATURED TOGGLE */}
+                              <button 
+                                     className="btn btn-sm" 
+                                     onClick={() => toggleFeatured(item)}
+                                     style={{ 
+                                              background: item.featured ? "#e8a33d20" : "var(--surface-2)", 
+                                              color: item.featured ? "#92400e" : "var(--text-secondary)", 
+                                              border: "none",
+                                              fontWeight: item.featured ? 700 : 500,
+                                             }}
+                                             >
+                                    {item.featured ? "★ Featured" : "☆ Feature"}
+                               </button>
+                              <button className="btn btn-sm" onClick={() => toggleAvailable(item)} style={{ background: item.available ? "var(--success-light)" : "var(--warning-light)", color: item.available ? "#166534" : "#92400e", border: "none" }}>
+                                {item.available ? "Available" : "Out of Stock"}
+                              </button>
+                              <button className="btn btn-sm btn-ghost" onClick={() => startEdit(item)}>Edit</button>
+                              <button className="btn btn-sm btn-ghost" onClick={() => deleteItem(item.id)} style={{ color: "var(--danger)" }}>Delete</button>
+                          </div>
                       </div>
                     )}
                   </div>
