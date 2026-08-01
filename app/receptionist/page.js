@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { db } from "@/lib/firebase";
+import { uploadToCloudinary } from "@/lib/cloudinary";
+import { useEffect, useState, useRef } from "react";
 import { playNotificationSound, requestNotificationPermission, showPopupNotification } from "@/lib/notifications";
 import {
   collection,
@@ -48,6 +50,10 @@ export default function ReceptionPage() {
   const [lastPendingCount, setLastPendingCount] = useState(0);
   const [lastBillCount, setLastBillCount] = useState(0);
   const [notifPermission, setNotifPermission] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);      // ← ADD
+  const [editUploading, setEditUploading] = useState(false);      // ← ADD
+  const fileInputRef = useRef(null);                                // ← ADD
+  const editFileInputRef = useRef(null);
 
   // === useEffects that don't depend on computed values ===
   useEffect(() => {
@@ -143,6 +149,34 @@ export default function ReceptionPage() {
     }
     setLastBillCount(billRequested.length);
   }, [billRequested.length, lastBillCount]);
+
+  async function handleImageUpload(file, isEdit = false) {
+  if (!file) return;
+   if (!file.type.startsWith("image/")) {
+     alert("Please select an image file");
+     return;
+    }
+   if (file.size > 5 * 1024 * 1024) {
+    alert("Image must be under 5MB");
+     return;
+    }
+
+   if (isEdit) setEditUploading(true);
+    else setUploadingImage(true);
+
+   try {
+    const url = await uploadToCloudinary(file);
+    
+    if (isEdit) setEditForm((p) => ({ ...p, imageUrl: url }));
+    else setNewItem((p) => ({ ...p, imageUrl: url }));
+   } catch (err) {
+    alert("Upload failed: " + err.message);
+    console.error(err);
+   } finally {
+    if (isEdit) setEditUploading(false);
+    else setUploadingImage(false);
+   }
+  }
 
   // === ALL functions ===
   async function confirmOrder(id) {
@@ -555,13 +589,53 @@ export default function ReceptionPage() {
       <div className="card" style={{ padding: 24, marginBottom: 32 }}>
         <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>➕ Add New Item</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-          <input placeholder="Name" value={newItem.name} onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))} style={inputStyle} />
-          <input placeholder="Price (₹)" type="number" value={newItem.price} onChange={(e) => setNewItem((p) => ({ ...p, price: e.target.value }))} style={inputStyle} />
-          <select value={newItem.category} onChange={(e) => setNewItem((p) => ({ ...p, category: e.target.value }))} style={inputStyle}>
-            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <input placeholder="Photo URL (optional)" value={newItem.imageUrl} onChange={(e) => setNewItem((p) => ({ ...p, imageUrl: e.target.value }))} style={inputStyle} />
+             <input placeholder="Name" value={newItem.name} onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))} style={inputStyle} />
+             <input placeholder="Price (₹)" type="number" value={newItem.price} onChange={(e) => setNewItem((p) => ({ ...p, price: e.target.value }))} style={inputStyle} />
+             <select value={newItem.category} onChange={(e) => setNewItem((p) => ({ ...p, category: e.target.value }))} style={inputStyle}>
+              {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+             </select>
+          </div>
+
+           {/* IMAGE UPLOAD SECTION */}
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600, display: "block", marginBottom: 6 }}>Food Photo</label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={(e) => handleImageUpload(e.target.files[0], false)}
+              style={{ display: "none" }}
+            />
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingImage}
+              style={{
+              padding: "10px 18px",
+              borderRadius: 10,
+              border: "2px dashed var(--border)",
+              background: "var(--surface-2)",
+              color: "var(--text-secondary)",
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+            >
+            {uploadingImage ? "⏳ Uploading..." : "📷 Choose Photo"}
+            </button>
+            {newItem.imageUrl && !uploadingImage && (
+            <img src={newItem.imageUrl} alt="Preview" style={{ width: 60, height: 60, borderRadius: 10, objectFit: "cover" }} />
+            )}
+          </div>
+          {newItem.imageUrl && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)", wordBreak: "break-all" }}>
+          {newItem.imageUrl}
         </div>
+       )}
+      </div>
         <input placeholder="Description (optional)" value={newItem.description} onChange={(e) => setNewItem((p) => ({ ...p, description: e.target.value }))} style={inputStyle} />
         <button className="btn btn-primary" onClick={addMenuItem} style={{ marginTop: 4 }}>+ Add Item</button>
       </div>
@@ -588,7 +662,36 @@ export default function ReceptionPage() {
                         <select value={editForm.category} onChange={(e) => setEditForm((p) => ({ ...p, category: e.target.value }))} style={inputStyle}>
                           {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
-                        <input value={editForm.imageUrl} onChange={(e) => setEditForm((p) => ({ ...p, imageUrl: e.target.value }))} style={inputStyle} placeholder="Image URL" />
+                        <div>
+                          <input
+                           ref={editFileInputRef}
+                           type="file"
+                           accept="image/*"
+                           onChange={(e) => handleImageUpload(e.target.files[0], true)}
+                          style={{ display: "none" }}
+                          />
+                          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                            <button
+                             onClick={() => editFileInputRef.current?.click()}
+                             disabled={editUploading}
+                             style={{
+                             padding: "8px 14px",
+                             borderRadius: 8,
+                             border: "2px dashed var(--border)",
+                             background: "var(--surface-2)",
+                             color: "var(--text-secondary)",
+                             fontSize: 13,
+                             fontWeight: 600,
+                             cursor: "pointer",
+                            }}
+                            >
+                            {editUploading ? "⏳..." : "📷 Change Photo"}
+                            </button>
+                            {editForm.imageUrl && !editUploading && (
+                            <img src={editForm.imageUrl} alt="Preview" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover" }} />
+                            )}
+                          </div>
+                        </div>
                         <input value={editForm.description} onChange={(e) => setEditForm((p) => ({ ...p, description: e.target.value }))} style={inputStyle} placeholder="Description" />
                         <div style={{ display: "flex", gap: 8 }}>
                           <button className="btn btn-sm btn-primary" onClick={saveEdit} style={{ flex: 1 }}>Save</button>
