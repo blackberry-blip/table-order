@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { db } from "@/lib/firebase";
+import { AuthGuard } from "@/lib/auth-guard";
+import { useAuth } from "@/lib/auth-context";
 import {
   collection,
   onSnapshot,
@@ -11,7 +13,16 @@ import {
   updateDoc,
 } from "firebase/firestore";
 
-export default function KitchenPage() {
+export default function KitchenPageWrapper() {
+  return (
+    <AuthGuard allowedRoles={["owner", "kitchen"]}>
+      <KitchenPage />
+    </AuthGuard>
+  );
+}
+
+function KitchenPage() {
+  const { role, logout } = useAuth();
   const [orders, setOrders] = useState([]);
   const [etaInputs, setEtaInputs] = useState({});
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -175,19 +186,41 @@ export default function KitchenPage() {
               <div style={{ fontSize: 13, opacity: 0.7 }}>{currentTime.toLocaleTimeString()}</div>
             </div>
           </div>
-          <div style={{ display: "flex", gap: 16, fontSize: 14 }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 22, fontWeight: 800 }}>{confirmed.length}</div>
-              <div style={{ opacity: 0.7 }}>Waiting</div>
+          
+          {/* Stats + Logout */}
+          <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+            <div style={{ display: "flex", gap: 16, fontSize: 14 }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>{confirmed.length}</div>
+                <div style={{ opacity: 0.7 }}>Waiting</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>{preparing.length}</div>
+                <div style={{ opacity: 0.7 }}>Cooking</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>{ready.length}</div>
+                <div style={{ opacity: 0.7 }}>Ready</div>
+              </div>
             </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 22, fontWeight: 800 }}>{preparing.length}</div>
-              <div style={{ opacity: 0.7 }}>Cooking</div>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 22, fontWeight: 800 }}>{ready.length}</div>
-              <div style={{ opacity: 0.7 }}>Ready</div>
-            </div>
+            
+            {/* Logout Button */}
+            <button
+              onClick={logout}
+              style={{
+                background: "rgba(0,0,0,0.2)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                color: "#fff",
+                padding: "8px 16px",
+                borderRadius: 10,
+                cursor: "pointer",
+                fontSize: 13,
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}
+            >
+              🚪 Logout {role ? `(${role})` : ""}
+            </button>
           </div>
         </div>
       </div>

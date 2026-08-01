@@ -7,45 +7,17 @@ const roles = [
     href: "/table",
     title: "Customer",
     subtitle: "Scan QR & order from your table",
-    icon: (
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5" />
-        <path d="M8.5 8.5v.01" />
-        <path d="M16 15.5v.01" />
-        <path d="M12 12v.01" />
-      </svg>
-    ),
+    icon: "📱",
     color: "#e8a33d",
     bg: "#fff5e0",
   },
   {
-    href: "/receptionist",
-    title: "Reception",
-    subtitle: "Manage orders, menu & billing",
-    icon: (
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-        <line x1="8" y1="21" x2="16" y2="21" />
-        <line x1="12" y1="17" x2="12" y2="21" />
-      </svg>
-    ),
+    href: "/login",
+    title: "Staff Login",
+    subtitle: "Reception, Kitchen, or Owner",
+    icon: "🔐",
     color: "#1a1a2e",
     bg: "#f0f0f5",
-  },
-  {
-    href: "/kitchen",
-    title: "Kitchen",
-    subtitle: "View tickets & update status",
-    icon: (
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M8 3v18" />
-        <path d="M16 3v18" />
-        <path d="M3 8h18" />
-        <path d="M3 16h18" />
-      </svg>
-    ),
-    color: "#22c55e",
-    bg: "#dcfce7",
   },
 ];
 
@@ -74,13 +46,10 @@ export default function Home() {
             justifyContent: "center",
             margin: "0 auto 20px",
             color: "#e8a33d",
+            fontSize: 28,
           }}
         >
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2" />
-            <path d="M7 2v20" />
-            <path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />
-          </svg>
+          🍽️
         </div>
         <h1 style={{ fontSize: 36, fontWeight: 800, color: "#1a1a2e", marginBottom: 8, letterSpacing: "-0.5px" }}>
           Table Order
@@ -96,27 +65,27 @@ export default function Home() {
           gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
           gap: 16,
           width: "100%",
-          maxWidth: 720,
+          maxWidth: 560,
         }}
       >
         {roles.map((role) => (
           <Link
             key={role.href}
             href={role.href}
-            style={{
-              textDecoration: "none",
-              color: "inherit",
-            }}
+            style={{ textDecoration: "none", color: "inherit" }}
           >
             <div
-              className="card"
               style={{
                 padding: 28,
+                background: "#fff",
+                borderRadius: 16,
+                border: "1px solid #e6e1d6",
                 display: "flex",
                 flexDirection: "column",
                 gap: 14,
                 cursor: "pointer",
                 transition: "all 0.2s ease",
+                boxShadow: "0 1px 3px rgba(20,20,30,0.05)",
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.transform = "translateY(-3px)";
@@ -124,7 +93,7 @@ export default function Home() {
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.transform = "translateY(0)";
-                e.currentTarget.style.boxShadow = "";
+                e.currentTarget.style.boxShadow = "0 1px 3px rgba(20,20,30,0.05)";
               }}
             >
               <div
@@ -137,6 +106,7 @@ export default function Home() {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
+                  fontSize: 24,
                 }}
               >
                 {role.icon}
@@ -146,11 +116,7 @@ export default function Home() {
                 <div style={{ fontSize: 14, color: "#6b6b7b" }}>{role.subtitle}</div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: role.color, marginTop: 4 }}>
-                Open
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M5 12h14" />
-                  <path d="m12 5 7 7-7 7" />
-                </svg>
+                Open →
               </div>
             </div>
           </Link>

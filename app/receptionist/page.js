@@ -4,6 +4,9 @@ import { useEffect, useState, useRef } from "react";
 import { db } from "@/lib/firebase";
 import { uploadToCloudinary } from "@/lib/cloudinary";
 import { playNotificationSound, requestNotificationPermission, showPopupNotification } from "@/lib/notifications";
+import { AuthGuard } from "@/lib/auth-guard";
+import { useAuth } from "@/lib/auth-context";
+import { useRouter } from "next/navigation";
 import {
   collection,
   onSnapshot,
@@ -17,13 +20,6 @@ import {
 } from "firebase/firestore";
 
 const DEFAULT_CATEGORIES = ["Starters", "Mains", "Breads & Rice", "Continental", "Beverages", "Desserts"];
-
-const TABS = [
-  { id: "dashboard", label: "Dashboard", icon: "📊" },
-  { id: "menu", label: "Menu", icon: "🍽️" },
-  { id: "tables", label: "Tables", icon: "🪑" },
-  { id: "settings", label: "Settings", icon: "⚙️" },
-];
 
 const ORDER_SECTIONS = [
   { key: "pending", label: "New", color: "#f59e0b", emptyMsg: "No new orders waiting.", emptyIcon: "🔔" },
@@ -40,7 +36,26 @@ function isToday(ts) {
   return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
 }
 
-export default function ReceptionPage() {
+export default function ReceptionPageWrapper() {
+  return (
+    <AuthGuard allowedRoles={["owner", "reception"]}>
+      <ReceptionPage />
+    </AuthGuard>
+  );
+}
+
+function ReceptionPage() {
+  const { role, logout } = useAuth();
+  const router = useRouter();
+
+  const TABS = [
+    { id: "dashboard", label: "Dashboard", icon: "📊" },
+    { id: "menu", label: "Menu", icon: "🍽️" },
+    { id: "tables", label: "Tables", icon: "🪑" },
+    { id: "settings", label: "Settings", icon: "⚙️" },
+    ...(role === "owner" ? [{ id: "staff", label: "Staff", icon: "👥", href: "/staff" }] : []),
+  ];
+
   // === ALL useState declarations FIRST ===
   const [activeTab, setActiveTab] = useState("dashboard");
   const [orderFilter, setOrderFilter] = useState("pending");
@@ -1164,7 +1179,7 @@ export default function ReceptionPage() {
     </div>
   );
 
-  // === RETURN ===
+    // === RETURN ===
   return (
     <div style={{ display: "flex", minHeight: "100vh", fontFamily: "'Inter', sans-serif" }}>
       <style>{`
@@ -1288,7 +1303,14 @@ export default function ReceptionPage() {
           {TABS.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => { setActiveTab(tab.id); if (isMobile) setSidebarOpen(false); }}
+              onClick={() => { 
+                if (tab.href) {
+                  router.push(tab.href);
+                  return;
+                }
+                setActiveTab(tab.id); 
+                if (isMobile) setSidebarOpen(false); 
+              }}
               title={tab.label}
               style={{
                 width: "100%",
@@ -1326,7 +1348,27 @@ export default function ReceptionPage() {
           ))}
         </nav>
         <div style={{ padding: sidebarCollapsed && !isMobile ? "16px 0" : 20, borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 11.5, color: "rgba(255,255,255,0.4)", textAlign: sidebarCollapsed && !isMobile ? "center" : "left" }}>
-          {sidebarCollapsed && !isMobile ? "🍽️" : "Powered by Table Order"}
+          {sidebarCollapsed && !isMobile ? "🍽️" : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <span>Powered by Table Order</span>
+              <button
+                onClick={logout}
+                style={{
+                  background: "rgba(220,38,38,0.15)",
+                  border: "none",
+                  color: "#fca5a5",
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  width: "100%",
+                }}
+              >
+                🚪 Logout {role ? `(${role})` : ""}
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
