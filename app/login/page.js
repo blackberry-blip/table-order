@@ -2,146 +2,262 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { auth, db, googleProvider } from "@/lib/firebase";
-import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
+import { auth, db, googleProvider, uploadToCloudinary } from "@/lib/firebase";
+import { signInWithPopup, signOut } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useAuth } from "@/lib/auth-context";
 
 export default function LoginPage() {
-  const [mode, setMode] = useState("select"); // "select" | "owner" | "staff"
-  const [staffRole, setStaffRole] = useState(""); // "reception" | "kitchen"
+  const [phase, setPhase] = useState("splash");
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [invitedRestaurantId, setInvitedRestaurantId] = useState(null);
   const [error, setError] = useState("");
-  const [loggingIn, setLoggingIn] = useState(false);
-  const router = useRouter();
-  const { user, role, loading } = useAuth();
+  const [loading, setLoading] = useState(false);
 
-  // Redirect if already logged in
+  const [password, setPassword] = useState("");
+  const [restaurantForm, setRestaurantForm] = useState({ name: "", tagline: "", address: "", logoUrl: "" });
+  const [logoUploading, setLogoUploading] = useState(false);
+
+  const router = useRouter();
+  const { user: authUser, role, loading: authLoading } = useAuth();
+
   useEffect(() => {
-    if (!loading && user && role) {
-      if (role === "owner") router.replace("/receptionist");
-      else if (role === "reception") router.replace("/receptionist");
+    if (!authLoading && authUser && role) {
+      if (role === "reception") router.replace("/receptionist");
       else if (role === "kitchen") router.replace("/kitchen");
     }
-  }, [user, role, loading, router]);
+  }, [authUser, role, authLoading, router]);
+
+  useEffect(() => {
+    if (phase === "splash") {
+      const t = setTimeout(() => setPhase("login"), 2200);
+      return () => clearTimeout(t);
+    }
+  }, [phase]);
 
   async function handleGoogleLogin() {
     setError("");
-    setLoggingIn(true);
-
+    setLoading(true);
     try {
       const result = await signInWithPopup(auth, googleProvider);
-      const firebaseUser = result.user;
-      const uid = firebaseUser.uid;
+      const fUser = result.user;
+      setFirebaseUser(fUser);
 
-      if (mode === "owner") {
-        // Owner login — check if restaurant exists
-        const profileDoc = await getDoc(doc(db, "restaurants", uid, "info", "profile"));
-        
-        if (!profileDoc.exists()) {
-          // First time — create restaurant
-          await setDoc(doc(db, "restaurants", uid, "info", "profile"), {
-            name: firebaseUser.displayName || "My Restaurant",
-            email: firebaseUser.email,
-            ownerName: firebaseUser.displayName || "",
-            createdAt: serverTimestamp(),
-          });
-          
-          // Create owner entry in users collection for reverse lookup
-          await setDoc(doc(db, "users", uid), {
-            restaurantId: uid,
-            role: "owner",
-            email: firebaseUser.email,
-            name: firebaseUser.displayName || "",
-            addedAt: serverTimestamp(),
-          });
-        }
-
-        router.replace("/receptionist");
-
-      } else if (mode === "staff") {
-        // Staff login — check if they were added by an owner
-        let userDoc = await getDoc(doc(db, "users", uid));
-        
-        // If not in users collection, check if owner added them by email
-        if (!userDoc.exists()) {
-          const staffEmailKey = firebaseUser.email.toLowerCase().replace(/\./g, "_");
-          const globalStaffDoc = await getDoc(doc(db, "staffEmails", staffEmailKey));
-          
-          if (globalStaffDoc.exists()) {
-            const globalData = globalStaffDoc.data();
-            
-            // Verify the role matches what they selected
-            if (globalData.role !== staffRole) {
-              setError(`You are registered as ${globalData.role}, not ${staffRole}.`);
-              await signOut(auth);
-              setLoggingIn(false);
-              return;
-            }
-            
-            // Create the user mapping and staff/{uid} document
-            await setDoc(doc(db, "users", uid), {
-              restaurantId: globalData.restaurantId,
-              role: globalData.role,
-              email: firebaseUser.email,
-              name: firebaseUser.displayName || globalData.name || "",
-              addedAt: serverTimestamp(),
-            });
-            
-            await setDoc(doc(db, "restaurants", globalData.restaurantId, "staff", uid), {
-              email: firebaseUser.email,
-              name: firebaseUser.displayName || globalData.name || "",
-              role: globalData.role,
-              addedAt: serverTimestamp(),
-              active: true,
-            });
-            
-            // Refresh userDoc
-            userDoc = await getDoc(doc(db, "users", uid));
-          }
-        }
-        
-        if (!userDoc.exists()) {
-          setError("You are not registered as staff. Ask the owner to add you first.");
-          await signOut(auth);
-          setLoggingIn(false);
-          return;
-        }
-
-        const userData = userDoc.data();
-        
-        // Double-check role matches what they clicked
-        if (userData.role !== staffRole) {
-          setError(`You are registered as ${userData.role}, not ${staffRole}.`);
-          await signOut(auth);
-          setLoggingIn(false);
-          return;
-        }
-
-        if (staffRole === "kitchen") router.replace("/kitchen");
-        else router.replace("/receptionist");
+      const userDoc = await getDoc(doc(db, "users", fUser.uid));
+      if (userDoc.exists()) {
+        const data = userDoc.data();
+        if (data.role === "reception") router.replace("/receptionist");
+        else if (data.role === "kitchen") router.replace("/kitchen");
+        return;
       }
+
+      const emailKey = fUser.email.toLowerCase().replace(/\./g, "_");
+      const inviteDoc = await getDoc(doc(db, "staffEmails", emailKey));
+      if (inviteDoc.exists()) {
+        setInvitedRestaurantId(inviteDoc.data().restaurantId);
+        setPhase("choose-role");
+        setLoading(false);
+        return;
+      }
+
+      setPhase("create-restaurant");
+      setLoading(false);
     } catch (err) {
       setError(err.message);
-      setLoggingIn(false);
+      setLoading(false);
     }
   }
 
-  // === SELECT MODE SCREEN ===
-  if (mode === "select") {
+  async function handleChooseRole(selectedRole) {
+    if (selectedRole === "reception") {
+      setPhase("set-password");
+      return;
+    }
+    await finishStaffSetup("kitchen");
+  }
+
+  async function handleSetPassword() {
+    if (!password || password.length < 4) {
+      setError("Password must be at least 4 characters");
+      return;
+    }
+    await finishStaffSetup("reception", password);
+  }
+
+  async function finishStaffSetup(selectedRole, pwd = null) {
+    setLoading(true);
+    try {
+      await setDoc(doc(db, "users", firebaseUser.uid), {
+        restaurantId: invitedRestaurantId,
+        role: selectedRole,
+        email: firebaseUser.email,
+        name: firebaseUser.displayName || "",
+        password: pwd,
+        addedAt: serverTimestamp(),
+      });
+
+      await setDoc(doc(db, "restaurants", invitedRestaurantId, "staff", firebaseUser.uid), {
+        email: firebaseUser.email,
+        name: firebaseUser.displayName || "",
+        role: selectedRole,
+        uid: firebaseUser.uid,
+        status: "active",
+        addedAt: serverTimestamp(),
+      }, { merge: true });
+
+      if (selectedRole === "reception") router.replace("/receptionist");
+      else router.replace("/kitchen");
+    } catch (err) {
+      setError(err.message);
+      setLoading(false);
+    }
+  }
+
+  async function handleLogoUpload(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return alert("Please select an image");
+    if (file.size > 5 * 1024 * 1024) return alert("Image must be under 5MB");
+    setLogoUploading(true);
+    try {
+      const url = await uploadToCloudinary(file);
+      setRestaurantForm((p) => ({ ...p, logoUrl: url }));
+    } catch (err) {
+      alert("Upload failed: " + err.message);
+    } finally {
+      setLogoUploading(false);
+    }
+  }
+
+  async function handleCreateRestaurant() {
+    if (!restaurantForm.name.trim()) {
+      setError("Restaurant name is required");
+      return;
+    }
+    setLoading(true);
+    try {
+      const restaurantId = firebaseUser.uid;
+
+      await setDoc(doc(db, "restaurants", restaurantId, "info", "profile"), {
+        name: restaurantForm.name.trim(),
+        tagline: restaurantForm.tagline,
+        address: restaurantForm.address,
+        logoUrl: restaurantForm.logoUrl,
+        email: firebaseUser.email,
+        createdAt: serverTimestamp(),
+      });
+
+      await setDoc(doc(db, "restaurants", restaurantId, "info", "billing"), {
+        taxPercent: 5,
+        servicePercent: 0,
+      });
+
+      await setDoc(doc(db, "users", firebaseUser.uid), {
+        restaurantId,
+        role: "reception",
+        email: firebaseUser.email,
+        name: firebaseUser.displayName || "",
+        isCreator: true,
+        addedAt: serverTimestamp(),
+      });
+
+      await setDoc(doc(db, "restaurants", restaurantId, "staff", firebaseUser.uid), {
+        email: firebaseUser.email,
+        name: firebaseUser.displayName || "",
+        role: "reception",
+        uid: firebaseUser.uid,
+        status: "active",
+        addedAt: serverTimestamp(),
+      });
+
+      router.replace("/receptionist");
+    } catch (err) {
+      setError(err.message);
+      setLoading(false);
+    }
+  }
+
+  if (phase === "splash") {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "linear-gradient(135deg, #faf8f5 0%, #f5f3ef 100%)" }}>
-        <div style={{ width: "100%", maxWidth: 400 }}>
-          <div style={{ textAlign: "center", marginBottom: 40 }}>
-            <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
-              <span style={{ fontSize: 28 }}>🍽️</span>
+      <div style={{ position: "fixed", inset: 0, background: "linear-gradient(135deg, #1a1a2e 0%, #241f3d 55%, #2d1b1b 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <style>{`@keyframes sPop{from{opacity:0;transform:scale(0.85)}to{opacity:1;transform:scale(1)}}`}</style>
+        <div style={{ animation: "sPop 0.9s ease", textAlign: "center" }}>
+          <div style={{ fontSize: 52, marginBottom: 20 }}>🍽️</div>
+          <div style={{ fontFamily: "Georgia, serif", fontSize: 40, fontWeight: 700, color: "#fff" }}>Table           Order</div>
+          <div style={{ width: 50, height: 2, background: "#e8a33d", margin: "16px auto" }} />
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", letterSpacing: 2, textTransform: "uppercase" }}>QR Based Ordering</div>
+        </div>
+      </div>
+    );
+  }
+
+  const containerStyle = { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "linear-gradient(135deg, #faf8f5 0%, #f5f3ef 100%)" };
+
+  if (phase === "login") {
+    return (
+      <div style={containerStyle}>
+        <div style={{ width: "100%", maxWidth: 400, textAlign: "center" }}>
+          <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", fontSize: 28 }}>🍽️</div>
+          <h1 style={{ fontSize: 28, fontWeight: 800, color: "#1a1a2e", marginBottom: 8 }}>Table Order</h1>
+          <p style={{ color: "#6b6b7b", marginBottom: 32, fontSize: 15 }}>Sign in to manage your restaurant</p>
+
+          {error && (
+            <div style={{ background: "#fef2f2", color: "#dc2626", padding: 12, borderRadius: 10, fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
+              {error}
             </div>
-            <h1 style={{ fontSize: 28, fontWeight: 800, color: "#1a1a2e", marginBottom: 6 }}>Table Order</h1>
-            <p style={{ color: "#6b6b7b", fontSize: 15 }}>Sign in to your account</p>
-          </div>
+          )}
+
+          <button
+            onClick={handleGoogleLogin}
+            disabled={loading}
+            className="tap-btn"
+            style={{
+              width: "100%",
+              padding: 14,
+              borderRadius: 12,
+              border: "1px solid #e6e1d6",
+              background: "#fff",
+              color: "#1a1a2e",
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: loading ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+              opacity: loading ? 0.6 : 1,
+            }}
+          >
+            {loading ? (
+              <span>Signing in...</span>
+            ) : (
+              <>
+                <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                Sign in with Google
+              </>
+            )}
+          </button>
+
+          <p style={{ marginTop: 24, fontSize: 12, color: "#aaa" }}>
+            By signing in, you agree to our Terms of Service
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "choose-role") {
+    return (
+      <div style={containerStyle}>
+        <div style={{ width: "100%", maxWidth: 400, textAlign: "center" }}>
+          <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#e8a33d20", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", fontSize: 28 }}>👋</div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: "#1a1a2e", marginBottom: 8 }}>Welcome aboard!</h1>
+          <p style={{ color: "#6b6b7b", marginBottom: 32, fontSize: 15 }}>You've been invited to join the team. Choose your role:</p>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <button
-              onClick={() => setMode("owner")}
+              onClick={() => handleChooseRole("kitchen")}
+              className="tap-btn"
               style={{
                 padding: 20,
                 borderRadius: 16,
@@ -152,144 +268,226 @@ export default function LoginPage() {
                 display: "flex",
                 alignItems: "center",
                 gap: 16,
-                transition: "all 0.2s ease",
               }}
-              onMouseEnter={(e) => e.currentTarget.style.borderColor = "#e8a33d"}
-              onMouseLeave={(e) => e.currentTarget.style.borderColor = "#e6e1d6"}
-            >
-              <div style={{ width: 48, height: 48, borderRadius: 12, background: "#fff5e0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>👑</div>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#1a1a2e" }}>Restaurant Owner</div>
-                <div style={{ fontSize: 13, color: "#6b6b7b" }}>Full access — menu, orders, billing, staff</div>
-              </div>
-            </button>
-
-            <button
-              onClick={() => { setStaffRole("reception"); setMode("staff"); }}
-              style={{
-                padding: 20,
-                borderRadius: 16,
-                border: "2px solid #e6e1d6",
-                background: "#fff",
-                cursor: "pointer",
-                textAlign: "left",
-                display: "flex",
-                alignItems: "center",
-                gap: 16,
-                transition: "all 0.2s ease",
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.borderColor = "#e8a33d"}
-              onMouseLeave={(e) => e.currentTarget.style.borderColor = "#e6e1d6"}
-            >
-              <div style={{ width: 48, height: 48, borderRadius: 12, background: "#f0f0f5", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>🖥️</div>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#1a1a2e" }}>Reception Staff</div>
-                <div style={{ fontSize: 13, color: "#6b6b7b" }}>Orders, tables, billing, menu view</div>
-              </div>
-            </button>
-
-            <button
-              onClick={() => { setStaffRole("kitchen"); setMode("staff"); }}
-              style={{
-                padding: 20,
-                borderRadius: 16,
-                border: "2px solid #e6e1d6",
-                background: "#fff",
-                cursor: "pointer",
-                textAlign: "left",
-                display: "flex",
-                alignItems: "center",
-                gap: 16,
-                transition: "all 0.2s ease",
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.borderColor = "#e8a33d"}
-              onMouseLeave={(e) => e.currentTarget.style.borderColor = "#e6e1d6"}
             >
               <div style={{ width: 48, height: 48, borderRadius: 12, background: "#dcfce7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>👨‍🍳</div>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#1a1a2e" }}>Kitchen Staff</div>
-                <div style={{ fontSize: 13, color: "#6b6b7b" }}>View tickets, cooking, ready status</div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: "#1a1a2e" }}>Kitchen Staff</div>
+                <div style={{ fontSize: 13, color: "#6b6b7b" }}>Manage orders and cooking times</div>
               </div>
             </button>
-          </div>
 
-          <div style={{ textAlign: "center", marginTop: 32 }}>
-            <a href="/table" style={{ color: "#e8a33d", fontWeight: 600, fontSize: 14, textDecoration: "none" }}>
-              ← Back to Customer Menu
-            </a>
+            <button
+              onClick={() => handleChooseRole("reception")}
+              className="tap-btn"
+              style={{
+                padding: 20,
+                borderRadius: 16,
+                border: "2px solid #e6e1d6",
+                background: "#fff",
+                cursor: "pointer",
+                textAlign: "left",
+                display: "flex",
+                alignItems: "center",
+                gap: 16,
+              }}
+            >
+              <div style={{ width: 48, height: 48, borderRadius: 12, background: "#dbeafe", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>🖥️</div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: "#1a1a2e" }}>Reception / Manager</div>
+                <div style={{ fontSize: 13, color: "#6b6b7b" }}>Manage menu, tables, billing & staff</div>
+              </div>
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
-  // === OWNER OR STAFF LOGIN SCREEN ===
-  return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "linear-gradient(135deg, #faf8f5 0%, #f5f3ef 100%)" }}>
-      <div style={{ width: "100%", maxWidth: 400, textAlign: "center" }}>
-        <button
-          onClick={() => setMode("select")}
-          style={{ background: "none", border: "none", color: "#6b6b7b", cursor: "pointer", fontSize: 14, marginBottom: 24, display: "flex", alignItems: "center", gap: 6 }}
-        >
-          ← Back
-        </button>
+  if (phase === "set-password") {
+    return (
+      <div style={containerStyle}>
+        <div style={{ width: "100%", maxWidth: 400, textAlign: "center" }}>
+          <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#dbeafe", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", fontSize: 28 }}>🔐</div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: "#1a1a2e", marginBottom: 8 }}>Set a password</h1>
+          <p style={{ color: "#6b6b7b", marginBottom: 32, fontSize: 15 }}>This helps keep your manager account secure</p>
 
-        <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
-          <span style={{ fontSize: 28 }}>
-            {mode === "owner" ? "👑" : staffRole === "reception" ? "🖥️" : "👨‍🍳"}
-          </span>
-        </div>
-
-        <h2 style={{ fontSize: 24, fontWeight: 800, color: "#1a1a2e", marginBottom: 6 }}>
-          {mode === "owner" ? "Owner Sign In" : staffRole === "reception" ? "Reception Sign In" : "Kitchen Sign In"}
-        </h2>
-        <p style={{ color: "#6b6b7b", fontSize: 14, marginBottom: 32 }}>
-          {mode === "owner" 
-            ? "Sign in with Google to access your restaurant dashboard" 
-            : "Sign in with Google — you must be added by the owner first"}
-        </p>
-
-        {error && (
-          <div style={{ background: "#fef2f2", color: "#dc2626", padding: 12, borderRadius: 10, fontSize: 13, fontWeight: 600, marginBottom: 20 }}>
-            {error}
-          </div>
-        )}
-
-        <button
-          onClick={handleGoogleLogin}
-          disabled={loggingIn}
-          style={{
-            width: "100%",
-            padding: 14,
-            borderRadius: 12,
-            border: "1px solid #e6e1d6",
-            background: "#fff",
-            cursor: loggingIn ? "not-allowed" : "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            fontSize: 15,
-            fontWeight: 600,
-            color: "#1a1a2e",
-            opacity: loggingIn ? 0.6 : 1,
-          }}
-        >
-          {loggingIn ? (
-            <span>Signing in...</span>
-          ) : (
-            <>
-              <svg width="20" height="20" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-              </svg>
-              Sign in with Google
-            </>
+          {error && (
+            <div style={{ background: "#fef2f2", color: "#dc2626", padding: 12, borderRadius: 10, fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
+              {error}
+            </div>
           )}
-        </button>
+
+          <input
+            type="password"
+            placeholder="Enter password (min 4 chars)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "14px 16px",
+              borderRadius: 12,
+              border: "1px solid #e6e1d6",
+              fontSize: 15,
+              marginBottom: 16,
+              outline: "none",
+            }}
+          />
+
+          <button
+            onClick={handleSetPassword}
+            disabled={loading}
+            className="tap-btn"
+            style={{
+              width: "100%",
+              padding: 14,
+              borderRadius: 12,
+              border: "none",
+              background: "#e8a33d",
+              color: "#fff",
+              fontSize: 15,
+              fontWeight: 700,
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.6 : 1,
+            }}
+          >
+            {loading ? "Setting up..." : "Continue"}
+          </button>
+
+          <button
+            onClick={() => { setPhase("choose-role"); setError(""); }}
+            style={{ marginTop: 16, background: "none", border: "none", color: "#6b6b7b", fontSize: 14, cursor: "pointer" }}
+          >
+            ← Go back
+          </button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  if (phase === "create-restaurant") {
+    return (
+      <div style={{ ...containerStyle, alignItems: "flex-start", paddingTop: 40 }}>
+        <div style={{ width: "100%", maxWidth: 480 }}>
+          <div style={{ textAlign: "center", marginBottom: 32 }}>
+            <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#e8a33d20", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px", fontSize: 28 }}>🏪</div>
+            <h1 style={{ fontSize: 24, fontWeight: 800, color: "#1a1a2e", marginBottom: 8 }}>Create your restaurant</h1>
+            <p style={{ color: "#6b6b7b", fontSize: 15 }}>Let's get your place set up in seconds</p>
+          </div>
+
+          {error && (
+            <div style={{ background: "#fef2f2", color: "#dc2626", padding: 12, borderRadius: 10, fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ background: "#fff", borderRadius: 20, padding: 28, boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#6b6b7b", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Restaurant Name *</label>
+              <input
+                placeholder="e.g. Spice Garden"
+                value={restaurantForm.name}
+                onChange={(e) => setRestaurantForm((p) => ({ ...p, name: e.target.value }))}
+                style={{
+                  width: "100%",
+                  padding: "14px 16px",
+                  borderRadius: 12,
+                  border: "1px solid #e6e1d6",
+                  fontSize: 15,
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#6b6b7b", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Tagline</label>
+              <input
+                placeholder="e.g. Authentic North Indian Cuisine"
+                value={restaurantForm.tagline}
+                onChange={(e) => setRestaurantForm((p) => ({ ...p, tagline: e.target.value }))}
+                style={{
+                  width: "100%",
+                  padding: "14px 16px",
+                  borderRadius: 12,
+                  border: "1px solid #e6e1d6",
+                  fontSize: 15,
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#6b6b7b", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Address</label>
+              <input
+                placeholder="Restaurant address"
+                value={restaurantForm.address}
+                onChange={(e) => setRestaurantForm((p) => ({ ...p, address: e.target.value }))}
+                style={{
+                  width: "100%",
+                  padding: "14px 16px",
+                  borderRadius: 12,
+                  border: "1px solid #e6e1d6",
+                  fontSize: 15,
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 24 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#6b6b7b", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Logo</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => handleLogoUpload(e.target.files[0])}
+                style={{ display: "none" }}
+                id="logo-upload"
+              />
+              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                <label
+                  htmlFor="logo-upload"
+                  style={{
+                    padding: "12px 20px",
+                    borderRadius: 12,
+                    border: "2px dashed #e6e1d6",
+                    background: "#faf8f5",
+                    cursor: "pointer",
+                    fontSize: 14,
+                    color: "#6b6b7b",
+                    fontWeight: 600,
+                  }}
+                >
+                  {logoUploading ? "Uploading..." : "📷 Upload Logo"}
+                </label>
+                {restaurantForm.logoUrl && !logoUploading && (
+                  <img src={restaurantForm.logoUrl} alt="Preview" style={{ width: 48, height: 48, borderRadius: 10, objectFit: "cover" }} />
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={handleCreateRestaurant}
+              disabled={loading}
+              className="tap-btn"
+              style={{
+                width: "100%",
+                padding: 16,
+                borderRadius: 14,
+                border: "none",
+                background: "#e8a33d",
+                color: "#fff",
+                fontSize: 16,
+                fontWeight: 700,
+                cursor: loading ? "not-allowed" : "pointer",
+                opacity: loading ? 0.6 : 1,
+              }}
+            >
+              {loading ? "Creating..." : "Create Restaurant →"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
 }

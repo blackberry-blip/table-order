@@ -8,6 +8,7 @@ import {
   addDoc,
   updateDoc,
   doc,
+  getDoc,
   onSnapshot,
   query,
   where,
@@ -15,19 +16,14 @@ import {
 } from "firebase/firestore";
 
 // ---------------------------------------------------------------------------
-// Config / helpers (module scope so they aren't recreated every render)
+// Config / helpers
 // ---------------------------------------------------------------------------
-
-// How many items show in the horizontally-scrollable "Popular Picks" strip
-// before the rest move to the "More to Explore" grid / the full "View All" page.
 const POPULAR_LIMIT = 8;
 
-// Emoji fallback per category — only used when the receptionist hasn't
-// uploaded a photo for that category (see getCategoryIcon below).
 const CATEGORY_ICONS = {
   All: "🍽️",
   Starters: "🥗",
-  "Soups": "🍲",
+  Soups: "🍲",
   Soup: "🍲",
   Salads: "🥙",
   Salad: "🥙",
@@ -56,12 +52,12 @@ const CATEGORY_ICONS = {
   Noodles: "🍜",
   Seafood: "🦐",
   Grill: "🍖",
-  "BBQ": "🍖",
+  BBQ: "🍖",
   Beverages: "🥤",
   Drinks: "🥤",
   Mocktails: "🍹",
   Shakes: "🥤",
-  "Milkshakes": "🥤",
+  Milkshakes: "🥤",
   Juices: "🧃",
   Desserts: "🍰",
   "Ice Cream": "🍨",
@@ -70,10 +66,6 @@ const CATEGORY_ICONS = {
   "Kids Menu": "🧒",
 };
 
-// Returns either { type: "emoji", value } or, if the receptionist has uploaded
-// a real photo for that category (stored on the `categories` collection —
-// same data the reception dashboard's "Menu" tab writes to), { type: "image", src }.
-// Photos always win over the emoji fallback.
 function getCategoryIcon(cat, categoryIconMap) {
   if (categoryIconMap && categoryIconMap[cat]) {
     return { type: "image", src: categoryIconMap[cat] };
@@ -82,8 +74,7 @@ function getCategoryIcon(cat, categoryIconMap) {
 }
 
 // ---------------------------------------------------------------------------
-// Tiny synthesized sound effects (no audio files needed).
-// Different actions get different, short, unobtrusive tones.
+// Audio
 // ---------------------------------------------------------------------------
 let _audioCtx = null;
 function getAudioCtx() {
@@ -115,9 +106,7 @@ function playTone(freq = 600, duration = 100, type = "sine") {
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + duration / 1000);
-  } catch {
-    // sound is a nice-to-have, never let it break the app
-  }
+  } catch {}
 }
 
 function playChime() {
@@ -127,8 +116,7 @@ function playChime() {
 }
 
 // ---------------------------------------------------------------------------
-// Global animation styles — mounted once at the top level (TablePage) so the
-// keyframes/classes stay available across every screen, including the splash.
+// Global CSS
 // ---------------------------------------------------------------------------
 const GLOBAL_ANIMATION_CSS = `
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -180,9 +168,9 @@ const GLOBAL_ANIMATION_CSS = `
   }
 `;
 
-// Shared card used by both the Popular Picks strip and every grid, so layouts
-// always stay visually identical. Tapping "+" gives a small floating "+1",
-// a soft pop sound, and (via the parent's cart-count effect) a cart bump.
+// ---------------------------------------------------------------------------
+// Components
+// ---------------------------------------------------------------------------
 function MenuCard({ item, qty, onAdd, width }) {
   const [pulses, setPulses] = useState([]);
 
@@ -277,7 +265,6 @@ function MenuCard({ item, qty, onAdd, width }) {
   );
 }
 
-// Full-screen "order placed" / "added to order" celebration.
 function SuccessOverlay({ message }) {
   return (
     <div
@@ -324,8 +311,6 @@ function SuccessOverlay({ message }) {
   );
 }
 
-// Small toast for order-status changes (confirmed / preparing / ready / served),
-// each with its own emoji + tone so different stages feel distinct.
 function StatusToast({ emoji, msg }) {
   return (
     <div
@@ -357,10 +342,12 @@ function StatusToast({ emoji, msg }) {
 }
 
 // ---------------------------------------------------------------------------
-
+// TableContent
+// ---------------------------------------------------------------------------
 function TableContent() {
   const searchParams = useSearchParams();
   const tableParam = searchParams.get("table");
+  const restaurantId = searchParams.get("restaurant");
 
   const [tableNo, setTableNo] = useState(tableParam ? parseInt(tableParam) : null);
   const [order, setOrder] = useState(null);
@@ -372,25 +359,14 @@ function TableContent() {
   const [tables, setTables] = useState([]);
   const [activeCategory, setActiveCategory] = useState("All");
   const [showCartSummary, setShowCartSummary] = useState(false);
-  const [lastOrderStatus, setLastOrderStatus] = useState(null);
   const [heroIndex, setHeroIndex] = useState(0);
   const [heroItems, setHeroItems] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
-
-  // Categories collection (same data the reception dashboard's "Menu" tab
-  // writes to — includes each category's uploaded photo, if any).
   const [categoryDocs, setCategoryDocs] = useState([]);
-
-  // "menu" = normal browsing screen. "allMenu" = the dedicated "View All"
-  // page reached from Popular Picks, with its own back button.
   const [screen, setScreen] = useState("menu");
-
-  // Celebration / feedback state
   const [successOverlay, setSuccessOverlay] = useState(null);
   const [statusToast, setStatusToast] = useState(null);
   const [cartBump, setCartBump] = useState(false);
-
-  // Opening animation — shows every time the page loads or refreshes
   const [showSplash, setShowSplash] = useState(true);
   const [splashLeaving, setSplashLeaving] = useState(false);
 
@@ -398,7 +374,7 @@ function TableContent() {
   const prevCartCountRef = useRef(0);
   const prevOrderStatusRef = useRef(null);
 
-  // Tick timer
+  // Tick
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 1000);
     return () => clearInterval(t);
@@ -406,63 +382,64 @@ function TableContent() {
 
   // Profile
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, "settings", "profile"), (snap) => {
+    if (!restaurantId) return;
+    const unsub = onSnapshot(doc(db, "restaurants", restaurantId, "info", "profile"), (snap) => {
       if (snap.exists()) setProfile(snap.data());
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
   // Menu items
   useEffect(() => {
-    const q = query(collection(db, "menuItems"), orderBy("createdAt", "asc"));
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "menuItems"), orderBy("createdAt", "asc"));
     const unsub = onSnapshot(q, (snap) => {
       const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setMenuItems(items);
-      // Hero items = featured items (receptionist can set featured flag, or just first 5 available)
       const featured = items.filter((m) => m.available && m.imageUrl).slice(0, 5);
       setHeroItems(featured);
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
   // Tables
   useEffect(() => {
-    const q = query(collection(db, "tables"), orderBy("number", "asc"));
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "tables"), orderBy("number", "asc"));
     const unsub = onSnapshot(q, (snap) => {
       setTables(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
-  // Categories — this is what the receptionist's "Menu" tab manages, photo
-  // uploads included. Powers the real category icons below.
+  // Categories
   useEffect(() => {
-    const q = query(collection(db, "categories"), orderBy("order", "asc"));
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "categories"), orderBy("order", "asc"));
     const unsub = onSnapshot(q, (snap) => {
       setCategoryDocs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
   // Order listener
   useEffect(() => {
-    if (!tableNo) return;
-    const q = query(collection(db, "orders"), where("table", "==", tableNo));
+    if (!tableNo || !restaurantId) return;
+    const q = query(
+      collection(db, "restaurants", restaurantId, "orders"),
+      where("table", "==", tableNo)
+    );
     const unsub = onSnapshot(q, (snap) => {
       const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const activeOrder = all
         .filter((o) => o.status !== "paid")
         .sort((a, b) => b.createdAt - a.createdAt)[0];
-      if (activeOrder && lastOrderStatus && activeOrder.status !== lastOrderStatus) {
-        // Sound could play here
-      }
-      if (activeOrder) setLastOrderStatus(activeOrder.status);
       setOrder(activeOrder || null);
     });
     return () => unsub();
-  }, [tableNo, lastOrderStatus]);
+  }, [tableNo, restaurantId]);
 
-  // Celebrate order-status changes with a small toast + a distinct tone per stage
+  // Status toast on change
   useEffect(() => {
     if (order && prevOrderStatusRef.current && prevOrderStatusRef.current !== order.status) {
       const configs = {
@@ -483,7 +460,7 @@ function TableContent() {
     prevOrderStatusRef.current = order?.status || null;
   }, [order?.status]);
 
-  // Hero auto-slide (drives an actual scrollable strip, not opacity fades)
+  // Hero auto-slide
   useEffect(() => {
     if (heroItems.length <= 1) return;
     const t = setInterval(() => {
@@ -497,7 +474,7 @@ function TableContent() {
     return () => clearInterval(t);
   }, [heroItems.length]);
 
-  // Bump the cart icon whenever an item is added
+  // Cart bump
   useEffect(() => {
     const c = Object.values(cart).reduce((a, b) => a + b, 0);
     if (c > prevCartCountRef.current) {
@@ -509,7 +486,7 @@ function TableContent() {
     prevCartCountRef.current = c;
   }, [cart]);
 
-  // Opening animation — always plays for a couple of seconds, then fades
+  // Splash
   useEffect(() => {
     const leaveTimer = setTimeout(() => setSplashLeaving(true), 1500);
     const hideTimer = setTimeout(() => setShowSplash(false), 1950);
@@ -539,8 +516,6 @@ function TableContent() {
 
   const availableItems = menuItems.filter((m) => m.available);
 
-  // Tab order follows the receptionist's category order; any category found
-  // only on menu items (edge case) is appended after.
   const categoryIconMap = {};
   categoryDocs.forEach((c) => {
     if (c.imageUrl) categoryIconMap[c.name] = c.imageUrl;
@@ -582,7 +557,7 @@ function TableContent() {
       return { name: item.name, qty, price: item.price };
     });
 
-    await addDoc(collection(db, "orders"), {
+    await addDoc(collection(db, "restaurants", restaurantId, "orders"), {
       table: tableNo,
       items,
       status: "pending",
@@ -610,7 +585,7 @@ function TableContent() {
       else merged.push(ni);
     });
 
-    await updateDoc(doc(db, "orders", order.id), {
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", order.id), {
       items: merged,
       status: "pending",
       etaMinutes: null,
@@ -625,7 +600,7 @@ function TableContent() {
   }
 
   async function requestBill() {
-    await updateDoc(doc(db, "orders", order.id), { status: "bill_requested" });
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", order.id), { status: "bill_requested" });
   }
 
   function getCountdown(o) {
@@ -653,8 +628,6 @@ function TableContent() {
     served: "Served. Enjoy!",
   };
 
-  // Shared bottom cart bar + cart modal, reused by both the "allMenu" page
-  // and the normal menu screen so the two stay perfectly in sync.
   const bottomCartBar = (count > 0 || order) ? (
     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
       <button
@@ -779,7 +752,20 @@ function TableContent() {
     </div>
   ) : null;
 
-  // ---------- Opening animation — plays every load / refresh ----------
+  // ---------- Invalid QR guard ----------
+  if (!restaurantId) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "#faf8f5" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: "#1a1a2e" }}>Invalid QR Code</h2>
+          <p style={{ color: "#6b6b7b", marginTop: 8 }}>Please scan a valid table QR code.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- Splash ----------
   if (showSplash) {
     const foodEmojis = ["🍕", "🍔", "🍜", "🍰", "🥗", "🍣", "🍩", "🥤"];
     return (
@@ -969,7 +955,7 @@ function TableContent() {
     );
   }
 
-  // ---------- Status screen — BLACK BOX PRESERVED ----------
+  // ---------- Status screen ----------
   if (order && !addingMore) {
     const countdown = getCountdown(order);
 
@@ -978,7 +964,6 @@ function TableContent() {
         {statusToast && <StatusToast emoji={statusToast.emoji} msg={statusToast.msg} />}
         {successOverlay && <SuccessOverlay message={successOverlay} />}
         <div style={{ maxWidth: 480, margin: "0 auto" }}>
-          {/* Header */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
             {profile?.logoUrl && (
               <img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }} />
@@ -989,7 +974,6 @@ function TableContent() {
             </div>
           </div>
 
-          {/* === THE BLACK BOX — EXACTLY AS YOU HAD IT === */}
           <div style={{ background: "#1C1B1A", color: "#fff", borderRadius: 20, padding: 32, textAlign: "center", marginBottom: 24 }}>
             <div style={{ fontSize: 22, fontWeight: 600 }}>{statusWords[order.status]}</div>
             {order.status === "preparing" && countdown && (
@@ -999,7 +983,6 @@ function TableContent() {
             )}
           </div>
 
-          {/* Order Items */}
           <div style={{ background: "#fff", borderRadius: 16, padding: 20, marginBottom: 20, boxShadow: "0 2px 12px rgba(0,0,0,0.04)" }}>
             <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
               <span>🛍️</span> Your Order
@@ -1019,7 +1002,6 @@ function TableContent() {
             </div>
           </div>
 
-          {/* Action Buttons */}
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <button
               onClick={() => { playTone(560, 70); setAddingMore(true); }}
@@ -1065,7 +1047,6 @@ function TableContent() {
           </div>
         </div>
 
-        {/* Bottom Cart Button */}
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
           <button
             onClick={() => { playTone(560, 70); setAddingMore(true); }}
@@ -1097,7 +1078,7 @@ function TableContent() {
     );
   }
 
-  // ---------- Full Menu ("View All") screen ----------
+  // ---------- Full Menu ("View All") ----------
   if (screen === "allMenu") {
     return (
       <div style={{ minHeight: "100vh", background: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", paddingBottom: 100 }}>
@@ -1138,11 +1119,9 @@ function TableContent() {
     );
   }
 
-  // ---------- MENU — DAIRY QUEEN STYLE ----------
+  // ---------- MENU ----------
   return (
     <div style={{ minHeight: "100vh", background: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", paddingBottom: 100 }}>
-      {/* hides the scrollbar track on Chrome/Safari for our horizontal strips;
-          scrollbarWidth:"none" (set inline below) covers Firefox */}
       <style jsx>{`
         .hscroll::-webkit-scrollbar {
           display: none;
@@ -1151,8 +1130,6 @@ function TableContent() {
 
       {successOverlay && <SuccessOverlay message={successOverlay} />}
 
-      {/* Full-bleed Banner — logo + stacked bold name / small table number,
-          with the search bar living in the same box */}
       <div style={{ background: "linear-gradient(135deg, #fff5e0 0%, #fef3c7 100%)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ maxWidth: 480, margin: "0 auto", padding: "16px 20px 18px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
@@ -1181,7 +1158,6 @@ function TableContent() {
             </button>
           )}
 
-          {/* Search bar now lives in the same box as the name / table number */}
           <div style={{ position: "relative" }}>
             <span style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", fontSize: 15, color: "#aaa" }}>🔍</span>
             <input
@@ -1207,7 +1183,6 @@ function TableContent() {
 
       <div style={{ maxWidth: 480, margin: "0 auto" }}>
         {isSearching ? (
-          // ---------- Search results ----------
           <div style={{ padding: "20px 20px 24px" }}>
             <h2 style={{ fontSize: 18, fontWeight: 800, color: "#1a1a2e", marginBottom: 16 }}>
               Results for &ldquo;{searchQuery}&rdquo;
@@ -1227,7 +1202,6 @@ function TableContent() {
           </div>
         ) : (
           <>
-            {/* Hero Slider — hand-swipeable, ratio matched to reference (5:4) */}
             {heroItems.length > 0 && !addingMore && (
               <div style={{ padding: "20px 20px 0" }}>
                 <div
@@ -1318,8 +1292,6 @@ function TableContent() {
               </div>
             )}
 
-            {/* Category Icons — real photos from the reception dashboard,
-                falling back to an emoji only when no photo has been uploaded */}
             <div style={{ padding: "20px 20px 0" }}>
               <div className="hscroll" style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8, scrollbarWidth: "none" }}>
                 {categories.map((cat) => {
@@ -1358,7 +1330,6 @@ function TableContent() {
               </div>
             </div>
 
-            {/* Popular Picks — max 8, horizontally scrollable, then "View All" → dedicated Full Menu page */}
             <div style={{ padding: "24px 20px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e" }}>
@@ -1407,8 +1378,6 @@ function TableContent() {
               )}
             </div>
 
-            {/* More to Explore — the rest of the menu, right below Popular Picks
-                (replaces the old rewards/quote strip) */}
             {activeCategory === "All" && filteredItems.length > POPULAR_LIMIT && (
               <div style={{ padding: "0 20px 24px" }}>
                 <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e", marginBottom: 16 }}>More to Explore</h2>

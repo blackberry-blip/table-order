@@ -17,6 +17,8 @@ import {
   deleteDoc,
   setDoc,
   addDoc,
+  getDocs,
+  where,
 } from "firebase/firestore";
 
 const DEFAULT_CATEGORIES = ["Starters", "Mains", "Breads & Rice", "Continental", "Beverages", "Desserts"];
@@ -38,14 +40,14 @@ function isToday(ts) {
 
 export default function ReceptionPageWrapper() {
   return (
-    <AuthGuard allowedRoles={["owner", "reception"]}>
+    <AuthGuard allowedRoles={["reception"]}>
       <ReceptionPage />
     </AuthGuard>
   );
 }
 
 function ReceptionPage() {
-  const { role, logout } = useAuth();
+  const { role, logout, restaurantId } = useAuth();
   const router = useRouter();
 
   const TABS = [
@@ -53,7 +55,6 @@ function ReceptionPage() {
     { id: "menu", label: "Menu", icon: "🍽️" },
     { id: "tables", label: "Tables", icon: "🪑" },
     { id: "settings", label: "Settings", icon: "⚙️" },
-    ...(role === "owner" ? [{ id: "staff", label: "Staff", icon: "👥", href: "/staff" }] : []),
   ];
 
   // === ALL useState declarations FIRST ===
@@ -61,8 +62,8 @@ function ReceptionPage() {
   const [orderFilter, setOrderFilter] = useState("pending");
   const [orders, setOrders] = useState([]);
   const [tick, setTick] = useState(0);
-  const [profile, setProfile] = useState({ name: "", tagline: "", logoUrl: "" });
-  const [profileForm, setProfileForm] = useState({ name: "", tagline: "", logoUrl: "" });
+  const [profile, setProfile] = useState({ name: "", tagline: "", logoUrl: "", address: "" });
+  const [profileForm, setProfileForm] = useState({ name: "", tagline: "", logoUrl: "", address: "" });
   const [savedMsg, setSavedMsg] = useState(false);
   const [menuItems, setMenuItems] = useState([]);
   const [newItem, setNewItem] = useState({ name: "", description: "", price: "", category: "", imageUrl: "", chefSpecial: false });
@@ -100,6 +101,13 @@ function ReceptionPage() {
   const categoryFileInputRef = useRef(null);
   const seededCategories = useRef(false);
 
+  // Staff management states
+  const [staffList, setStaffList] = useState([]);
+  const [newStaffEmail, setNewStaffEmail] = useState("");
+  const [newStaffRole, setNewStaffRole] = useState("kitchen");
+  const [addingStaff, setAddingStaff] = useState(false);
+  const [staffError, setStaffError] = useState("");
+
   // === SPLASH ANIMATION (shows on every load/refresh) ===
   useEffect(() => {
     setShowSplash(true);
@@ -134,60 +142,67 @@ function ReceptionPage() {
     return () => clearInterval(t);
   }, []);
 
+  // Listen to restaurant-specific collections
   useEffect(() => {
-    const q = query(collection(db, "orders"), orderBy("createdAt", "asc"));
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "orders"), orderBy("createdAt", "asc"));
     const unsub = onSnapshot(q, (snap) => {
       setOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, "settings", "profile"), (snap) => {
+    if (!restaurantId) return;
+    const unsub = onSnapshot(doc(db, "restaurants", restaurantId, "info", "profile"), (snap) => {
       if (snap.exists()) {
         setProfile(snap.data());
         setProfileForm(snap.data());
       }
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, "settings", "billing"), (snap) => {
+    if (!restaurantId) return;
+    const unsub = onSnapshot(doc(db, "restaurants", restaurantId, "info", "billing"), (snap) => {
       if (snap.exists()) {
         setBilling(snap.data());
         setBillingForm(snap.data());
       }
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
   useEffect(() => {
-    const q = query(collection(db, "menuItems"), orderBy("createdAt", "asc"));
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "menuItems"), orderBy("createdAt", "asc"));
     const unsub = onSnapshot(q, (snap) => {
       setMenuItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
   useEffect(() => {
-    const q = query(collection(db, "tables"), orderBy("number", "asc"));
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "tables"), orderBy("number", "asc"));
     const unsub = onSnapshot(q, (snap) => {
       setTables(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
-  // Categories: live sync + one-time seed of sensible defaults (incl. Continental)
+  // Categories: live sync + one-time seed
   useEffect(() => {
-    const q = query(collection(db, "categories"), orderBy("order", "asc"));
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "categories"), orderBy("order", "asc"));
     const unsub = onSnapshot(q, async (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setCategories(list);
       if (list.length === 0 && !seededCategories.current) {
         seededCategories.current = true;
         for (let i = 0; i < DEFAULT_CATEGORIES.length; i++) {
-          await addDoc(collection(db, "categories"), {
+          await addDoc(collection(db, "restaurants", restaurantId, "categories"), {
             name: DEFAULT_CATEGORIES[i],
             imageUrl: "",
             order: i,
@@ -197,7 +212,17 @@ function ReceptionPage() {
       }
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
+
+  // Staff list
+  useEffect(() => {
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "staff"));
+    const unsub = onSnapshot(q, (snap) => {
+      setStaffList(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, [restaurantId]);
 
   useEffect(() => {
     requestNotificationPermission().then(setNotifPermission);
@@ -353,21 +378,21 @@ function ReceptionPage() {
 
   // === ALL OTHER FUNCTIONS ===
   async function confirmOrder(id) {
-    await updateDoc(doc(db, "orders", id), { status: "confirmed" });
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "confirmed" });
   }
   async function declineOrder(id) {
-    await deleteDoc(doc(db, "orders", id));
+    await deleteDoc(doc(db, "restaurants", restaurantId, "orders", id));
   }
   async function markServed(id) {
-    await updateDoc(doc(db, "orders", id), { status: "served" });
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "served" });
   }
   async function saveProfile() {
-    await setDoc(doc(db, "settings", "profile"), profileForm, { merge: true });
+    await setDoc(doc(db, "restaurants", restaurantId, "info", "profile"), profileForm, { merge: true });
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 2000);
   }
   async function saveBilling() {
-    await setDoc(doc(db, "settings", "billing"), {
+    await setDoc(doc(db, "restaurants", restaurantId, "info", "billing"), {
       taxPercent: parseFloat(billingForm.taxPercent) || 0,
       servicePercent: parseFloat(billingForm.servicePercent) || 0,
     });
@@ -381,7 +406,7 @@ function ReceptionPage() {
     const serviceAmount = Math.round((subtotal * (billing.servicePercent || 0)) / 100);
     const grandTotal = subtotal + taxAmount + serviceAmount;
 
-    await updateDoc(doc(db, "orders", o.id), {
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", o.id), {
       status: "billed",
       billSubtotal: subtotal,
       billTaxPercent: billing.taxPercent || 0,
@@ -393,7 +418,7 @@ function ReceptionPage() {
   }
 
   async function markPaid(id) {
-    await updateDoc(doc(db, "orders", id), { status: "paid" });
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "paid" });
   }
 
   function printBill(o) {
@@ -452,7 +477,7 @@ function ReceptionPage() {
     if (categories.some((c) => c.name.toLowerCase() === newCategory.name.trim().toLowerCase())) {
       return alert("That category already exists");
     }
-    await addDoc(collection(db, "categories"), {
+    await addDoc(collection(db, "restaurants", restaurantId, "categories"), {
       name: newCategory.name.trim(),
       imageUrl: newCategory.imageUrl,
       order: categories.length,
@@ -469,7 +494,7 @@ function ReceptionPage() {
       return;
     }
     if (!confirm(`Delete "${cat.name}" category?`)) return;
-    await deleteDoc(doc(db, "categories", cat.id));
+    await deleteDoc(doc(db, "restaurants", restaurantId, "categories", cat.id));
     if (menuTab === cat.name) setMenuTab("all");
   }
 
@@ -490,14 +515,13 @@ function ReceptionPage() {
     ) {
       return alert("Another category already has that name");
     }
-    await updateDoc(doc(db, "categories", cat.id), {
+    await updateDoc(doc(db, "restaurants", restaurantId, "categories", cat.id), {
       name: newName,
       imageUrl: editCategoryForm.imageUrl,
     });
-    // Keep menu items pointed at the renamed category
     if (newName !== cat.name) {
       const itemsToUpdate = menuItems.filter((m) => m.category === cat.name);
-      await Promise.all(itemsToUpdate.map((m) => updateDoc(doc(db, "menuItems", m.id), { category: newName })));
+      await Promise.all(itemsToUpdate.map((m) => updateDoc(doc(db, "restaurants", restaurantId, "menuItems", m.id), { category: newName })));
       if (menuTab === cat.name) setMenuTab(newName);
     }
     setEditingCategoryId(null);
@@ -506,7 +530,7 @@ function ReceptionPage() {
   async function addMenuItem() {
     if (!newItem.name || !newItem.price) return alert("Name and price are required");
     if (!newItem.category) return alert("Please choose a category (add one first if the list is empty)");
-    await addDoc(collection(db, "menuItems"), {
+    await addDoc(collection(db, "restaurants", restaurantId, "menuItems"), {
       name: newItem.name,
       description: newItem.description,
       price: parseFloat(newItem.price),
@@ -525,7 +549,7 @@ function ReceptionPage() {
     setEditForm(item);
   }
   async function saveEdit() {
-    await updateDoc(doc(db, "menuItems", editingId), {
+    await updateDoc(doc(db, "restaurants", restaurantId, "menuItems", editingId), {
       name: editForm.name,
       description: editForm.description,
       price: parseFloat(editForm.price),
@@ -537,36 +561,36 @@ function ReceptionPage() {
     setEditingId(null);
   }
   async function toggleAvailable(item) {
-    await updateDoc(doc(db, "menuItems", item.id), { available: !item.available });
+    await updateDoc(doc(db, "restaurants", restaurantId, "menuItems", item.id), { available: !item.available });
   }
   async function toggleFeatured(item) {
-    await updateDoc(doc(db, "menuItems", item.id), { featured: !item.featured });
+    await updateDoc(doc(db, "restaurants", restaurantId, "menuItems", item.id), { featured: !item.featured });
   }
   async function toggleChefSpecial(item) {
-    await updateDoc(doc(db, "menuItems", item.id), { chefSpecial: !item.chefSpecial });
+    await updateDoc(doc(db, "restaurants", restaurantId, "menuItems", item.id), { chefSpecial: !item.chefSpecial });
   }
   async function deleteItem(id) {
     if (!confirm("Delete this item?")) return;
-    await deleteDoc(doc(db, "menuItems", id));
+    await deleteDoc(doc(db, "restaurants", restaurantId, "menuItems", id));
   }
 
   async function addTable() {
     const nextNumber = tables.length > 0 ? Math.max(...tables.map((t) => t.number)) + 1 : 1;
-    await addDoc(collection(db, "tables"), { number: nextNumber, createdAt: Date.now() });
+    await addDoc(collection(db, "restaurants", restaurantId, "tables"), { number: nextNumber, createdAt: Date.now() });
   }
 
   async function deleteTable(id) {
     if (!confirm("Delete this table? Its QR code will stop working.")) return;
-    await deleteDoc(doc(db, "tables", id));
+    await deleteDoc(doc(db, "restaurants", restaurantId, "tables", id));
   }
 
   function qrUrlFor(tableNumber) {
-    const link = `${siteUrl}/table?table=${tableNumber}`;
+    const link = `${siteUrl}/table?table=${tableNumber}&restaurant=${restaurantId}`;
     return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(link)}`;
   }
 
   function printQr(tableNumber) {
-    const link = `${siteUrl}/table?table=${tableNumber}`;
+    const link = `${siteUrl}/table?table=${tableNumber}&restaurant=${restaurantId}`;
     const imgUrl = qrUrlFor(tableNumber);
     const html = `
       <html>
@@ -592,6 +616,55 @@ function ReceptionPage() {
     const win = window.open("", "_blank", "width=420,height=520");
     win.document.write(html);
     win.document.close();
+  }
+
+  // === STAFF MANAGEMENT ===
+  async function addStaff() {
+    if (!newStaffEmail.trim()) {
+      setStaffError("Email is required");
+      return;
+    }
+    if (!newStaffEmail.includes("@")) {
+      setStaffError("Enter a valid email");
+      return;
+    }
+    setAddingStaff(true);
+    setStaffError("");
+    try {
+      const emailKey = newStaffEmail.trim().toLowerCase().replace(/\./g, "_");
+      
+      // Check if already invited
+      const existing = await getDoc(doc(db, "staffEmails", emailKey));
+      if (existing.exists()) {
+        setStaffError("This email was already invited");
+        setAddingStaff(false);
+        return;
+      }
+
+      await setDoc(doc(db, "staffEmails", emailKey), {
+        restaurantId,
+        role: newStaffRole,
+        email: newStaffEmail.trim().toLowerCase(),
+        invitedAt: serverTimestamp(),
+      });
+
+      setNewStaffEmail("");
+      setNewStaffRole("kitchen");
+      setAddingStaff(false);
+    } catch (err) {
+      setStaffError(err.message);
+      setAddingStaff(false);
+    }
+  }
+
+  async function removeStaff(staffId) {
+    if (!confirm("Remove this staff member? They won't be able to log in anymore.")) return;
+    const staff = staffList.find((s) => s.id === staffId);
+    if (staff) {
+      const emailKey = staff.email.toLowerCase().replace(/\./g, "_");
+      await deleteDoc(doc(db, "staffEmails", emailKey));
+      await deleteDoc(doc(db, "restaurants", restaurantId, "staff", staffId));
+    }
   }
 
   function getCountdown(o) {
@@ -650,7 +723,7 @@ function ReceptionPage() {
     </div>
   );
 
-  // === RENDER: DASHBOARD (stats + all 5 order actions in one hub) ===
+  // === RENDER: DASHBOARD ===
   const renderDashboard = () => {
     const currentSection = ORDER_SECTIONS.find((s) => s.key === orderFilter);
     const currentData = orderDataByKey[orderFilter] || [];
@@ -949,22 +1022,12 @@ function ReceptionPage() {
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: "1 1 240px", minWidth: 220 }}>
           <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", opacity: 0.5 }}>🔎</span>
-          <input
-            placeholder="Search the menu..."
-            value={menuSearch}
-            onChange={(e) => setMenuSearch(e.target.value)}
-            style={{ ...inputStyle, marginBottom: 0, paddingLeft: 38 }}
-          />
+          <input placeholder="Search the menu..." value={menuSearch} onChange={(e) => setMenuSearch(e.target.value)} style={{ ...inputStyle, marginBottom: 0, paddingLeft: 38 }} />
         </div>
       </div>
 
       <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, marginBottom: 22 }}>
-        <button
-          onClick={() => setMenuTab("all")}
-          style={{
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 68, background: "none", border: "none", cursor: "pointer", flexShrink: 0,
-          }}
-        >
+        <button onClick={() => setMenuTab("all")} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 68, background: "none", border: "none", cursor: "pointer", flexShrink: 0 }}>
           <div style={{ width: 52, height: 52, borderRadius: "50%", background: menuTab === "all" ? "#1a1a2e" : "var(--surface-2, #f3efe6)", color: menuTab === "all" ? "#fff" : "var(--text-secondary, #6b6b7b)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, border: menuTab === "all" ? "2px solid #1a1a2e" : "2px solid transparent" }}>
             🍴
           </div>
@@ -981,20 +1044,8 @@ function ReceptionPage() {
                     {cat.imageUrl ? <img src={cat.imageUrl} alt={cat.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "🍽️"}
                   </div>
                 </button>
-                <button
-                  onClick={() => startEditCategory(cat)}
-                  title="Edit category"
-                  style={{ position: "absolute", top: -4, left: -4, width: 19, height: 19, borderRadius: "50%", background: "#1a1a2e", color: "#fff", border: "2px solid var(--surface, #fff)", fontSize: 9.5, cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}
-                >
-                  ✎
-                </button>
-                <button
-                  onClick={() => deleteCategory(cat)}
-                  title="Delete category"
-                  style={{ position: "absolute", top: -4, right: -4, width: 19, height: 19, borderRadius: "50%", background: "var(--danger, #dc2626)", color: "#fff", border: "2px solid var(--surface, #fff)", fontSize: 10, cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}
-                >
-                  ✕
-                </button>
+                <button onClick={() => startEditCategory(cat)} title="Edit category" style={{ position: "absolute", top: -4, left: -4, width: 19, height: 19, borderRadius: "50%", background: "#1a1a2e", color: "#fff", border: "2px solid var(--surface, #fff)", fontSize: 9.5, cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>✎</button>
+                <button onClick={() => deleteCategory(cat)} title="Delete category" style={{ position: "absolute", top: -4, right: -4, width: 19, height: 19, borderRadius: "50%", background: "var(--danger, #dc2626)", color: "#fff", border: "2px solid var(--surface, #fff)", fontSize: 10, cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
               </div>
               <span onClick={() => setMenuTab(cat.name)} style={{ fontSize: 11.5, fontWeight: isActive ? 800 : 600, color: isActive ? "var(--text, #1a1a2e)" : "var(--text-secondary, #6b6b7b)", cursor: "pointer", whiteSpace: "nowrap" }}>
                 {cat.name}{count > 0 ? ` (${count})` : ""}
@@ -1068,7 +1119,7 @@ function ReceptionPage() {
               <div style={{ padding: 20, textAlign: "center" }}>
                 {siteUrl && (
                   <div style={{ background: "#fff", padding: 12, borderRadius: 14, display: "inline-block", boxShadow: "0 2px 10px rgba(0,0,0,0.06)" }}>
-                    <img src={qrUrlFor(t.number)} alt={`QR table ${t.number}`} style={{ width: 140, height: 140, display: "block" }} />
+                                        <img src={qrUrlFor(t.number)} alt={`QR table ${t.number}`} style={{ width: 140, height: 140, display: "block" }} />
                   </div>
                 )}
                 <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
@@ -1083,22 +1134,21 @@ function ReceptionPage() {
     </div>
   );
 
-  // === RENDER: SETTINGS (profile-page style) ===
+  // === RENDER: SETTINGS (profile + billing + staff management) ===
   const renderSettings = () => (
     <div>
       <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 24, fontFamily: "'Fraunces', serif" }}>Settings</h2>
 
+      {/* Profile Card */}
       <div className="card" style={{ borderRadius: 20, overflow: "hidden", marginBottom: 24 }}>
-        <div
-          style={{
-            height: 150,
-            position: "relative",
-            background: profileForm.logoUrl
-              ? `linear-gradient(180deg, rgba(26,26,46,0.55), rgba(26,26,46,0.75)), url(${profileForm.logoUrl}) center/cover`
-              : "linear-gradient(135deg, #1a1a2e, #3a3a5e)",
-            filter: profileForm.logoUrl ? "saturate(1.1)" : "none",
-          }}
-        >
+        <div style={{
+          height: 150,
+          position: "relative",
+          background: profileForm.logoUrl
+            ? `linear-gradient(180deg, rgba(26,26,46,0.55), rgba(26,26,46,0.75)), url(${profileForm.logoUrl}) center/cover`
+            : "linear-gradient(135deg, #1a1a2e, #3a3a5e)",
+          filter: profileForm.logoUrl ? "saturate(1.1)" : "none",
+        }}>
           <div style={{ position: "absolute", inset: 0, backdropFilter: profileForm.logoUrl ? "blur(6px)" : "none" }} />
         </div>
         <div style={{ padding: "0 28px 28px", marginTop: -46, textAlign: "center" }}>
@@ -1117,6 +1167,8 @@ function ReceptionPage() {
             <input value={profileForm.name || ""} onChange={(e) => setProfileForm((p) => ({ ...p, name: e.target.value }))} style={inputStyle} />
             <label style={labelStyle}>Tagline</label>
             <input value={profileForm.tagline || ""} onChange={(e) => setProfileForm((p) => ({ ...p, tagline: e.target.value }))} style={inputStyle} />
+            <label style={labelStyle}>Address</label>
+            <input value={profileForm.address || ""} onChange={(e) => setProfileForm((p) => ({ ...p, address: e.target.value }))} style={inputStyle} />
 
             <label style={labelStyle}>Logo</label>
             <input ref={logoFileInputRef} type="file" accept="image/*" onChange={(e) => handleLogoUpload(e.target.files[0])} style={{ display: "none" }} />
@@ -1133,7 +1185,8 @@ function ReceptionPage() {
         </div>
       </div>
 
-      <div className="card" style={{ padding: 24, borderRadius: 18, maxWidth: 420 }}>
+      {/* Billing Settings */}
+      <div className="card" style={{ padding: 24, borderRadius: 18, maxWidth: 420, marginBottom: 24 }}>
         <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>💰 Billing Settings</h3>
         <label style={labelStyle}>Tax / GST %</label>
         <input type="number" value={billingForm.taxPercent} onChange={(e) => setBillingForm((p) => ({ ...p, taxPercent: e.target.value }))} style={inputStyle} />
@@ -1142,6 +1195,73 @@ function ReceptionPage() {
         <button className="btn btn-primary" onClick={saveBilling}>
           {billingSaved ? "Saved ✓" : "Save Billing Settings"}
         </button>
+      </div>
+
+      {/* Staff Management */}
+      <div className="card" style={{ padding: 24, borderRadius: 18, maxWidth: 520 }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>👥 Staff Management</h3>
+        <p style={{ fontSize: 13, color: "var(--text-secondary, #6b6b7b)", marginBottom: 16 }}>
+          Invite staff by email. They'll sign in with Google and be automatically linked to your restaurant.
+        </p>
+
+        {staffError && <div style={{ background: "#fef2f2", color: "#dc2626", padding: 10, borderRadius: 8, fontSize: 12, fontWeight: 600, marginBottom: 12 }}>{staffError}</div>}
+
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 20 }}>
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <label style={labelStyle}>Email</label>
+            <input
+              type="email"
+              placeholder="staff@example.com"
+              value={newStaffEmail}
+              onChange={(e) => setNewStaffEmail(e.target.value)}
+              style={{ ...inputStyle, marginBottom: 0 }}
+            />
+          </div>
+          <div style={{ minWidth: 140 }}>
+            <label style={labelStyle}>Role</label>
+            <select
+              value={newStaffRole}
+              onChange={(e) => setNewStaffRole(e.target.value)}
+              style={{ ...inputStyle, marginBottom: 0 }}
+            >
+              <option value="kitchen">Kitchen</option>
+              <option value="reception">Reception</option>
+            </select>
+          </div>
+          <button
+            onClick={addStaff}
+            disabled={addingStaff}
+            className="btn btn-primary"
+            style={{ padding: "11px 20px", opacity: addingStaff ? 0.6 : 1 }}
+          >
+            {addingStaff ? "..." : "Invite"}
+          </button>
+        </div>
+
+        {staffList.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {staffList.map((s) => (
+              <div key={s.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "var(--surface-2, #f3efe6)", borderRadius: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: "50%", background: s.role === "reception" ? "#dbeafe" : "#dcfce7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
+                    {s.role === "reception" ? "🖥️" : "👨‍🍳"}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{s.name || s.email}</div>
+                    <div style={{ fontSize: 11, color: "var(--text-secondary, #6b6b7b)", textTransform: "capitalize" }}>{s.role}</div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => removeStaff(s.id)}
+                  style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 16, padding: 4 }}
+                  title="Remove staff"
+                >
+                  🗑️
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1179,7 +1299,7 @@ function ReceptionPage() {
     </div>
   );
 
-    // === RETURN ===
+  // === RETURN ===
   return (
     <div style={{ display: "flex", minHeight: "100vh", fontFamily: "'Inter', sans-serif" }}>
       <style>{`
@@ -1303,14 +1423,7 @@ function ReceptionPage() {
           {TABS.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => { 
-                if (tab.href) {
-                  router.push(tab.href);
-                  return;
-                }
-                setActiveTab(tab.id); 
-                if (isMobile) setSidebarOpen(false); 
-              }}
+              onClick={() => { setActiveTab(tab.id); if (isMobile) setSidebarOpen(false); }}
               title={tab.label}
               style={{
                 width: "100%",

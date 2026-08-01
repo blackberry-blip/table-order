@@ -15,25 +15,26 @@ import {
 
 export default function KitchenPageWrapper() {
   return (
-    <AuthGuard allowedRoles={["owner", "kitchen"]}>
+    <AuthGuard allowedRoles={["kitchen"]}>
       <KitchenPage />
     </AuthGuard>
   );
 }
 
 function KitchenPage() {
-  const { role, logout } = useAuth();
+  const { role, logout, restaurantId } = useAuth();
   const [orders, setOrders] = useState([]);
   const [etaInputs, setEtaInputs] = useState({});
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
-    const q = query(collection(db, "orders"), orderBy("createdAt", "asc"));
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "orders"), orderBy("createdAt", "asc"));
     const unsub = onSnapshot(q, (snap) => {
       setOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
     return () => unsub();
-  }, []);
+  }, [restaurantId]);
 
   useEffect(() => {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -46,7 +47,7 @@ function KitchenPage() {
 
   async function startCooking(id) {
     const mins = parseInt(etaInputs[id]) || 10;
-    await updateDoc(doc(db, "orders", id), {
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), {
       status: "preparing",
       etaMinutes: mins,
       preparingAt: Date.now(),
@@ -54,7 +55,7 @@ function KitchenPage() {
   }
 
   async function markReady(id) {
-    await updateDoc(doc(db, "orders", id), { status: "ready" });
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "ready" });
   }
 
   function getCountdown(o) {
@@ -85,9 +86,7 @@ function KitchenPage() {
         style={{
           padding: 20,
           marginBottom: 16,
-          borderLeft: `4px solid ${
-            type === "confirmed" ? "#f59e0b" : type === "preparing" ? (isOverdue ? "#ef4444" : "#3b82f6") : "#22c55e"
-          }`,
+          borderLeft: `4px solid ${type === "confirmed" ? "#f59e0b" : type === "preparing" ? (isOverdue ? "#ef4444" : "#3b82f6") : "#22c55e"}`,
           transition: "all 0.2s ease",
         }}
       >

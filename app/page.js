@@ -1,131 +1,51 @@
 "use client";
 
-import Link from "next/link";
-
-const roles = [
-  {
-    href: "/table",
-    title: "Customer",
-    subtitle: "Scan QR & order from your table",
-    icon: "📱",
-    color: "#e8a33d",
-    bg: "#fff5e0",
-  },
-  {
-    href: "/login",
-    title: "Staff Login",
-    subtitle: "Reception, Kitchen, or Owner",
-    icon: "🔐",
-    color: "#1a1a2e",
-    bg: "#f0f0f5",
-  },
-];
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
+  const [leaving, setLeaving] = useState(false);
+  const router = useRouter();
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setLeaving(true), 2000);
+    const t2 = setTimeout(() => router.push("/login"), 2600);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [router]);
+
   return (
     <div
       style={{
-        minHeight: "100vh",
+        position: "fixed",
+        inset: 0,
+        zIndex: 9999,
+        background: "linear-gradient(135deg, #1a1a2e 0%, #241f3d 55%, #2d1b1b 100%)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        padding: 24,
-        background: "linear-gradient(135deg, #faf8f5 0%, #f5f3ef 100%)",
+        opacity: leaving ? 0 : 1,
+        transition: "opacity 0.6s ease",
       }}
     >
-      <div style={{ textAlign: "center", marginBottom: 48 }}>
-        <div
-          style={{
-            width: 64,
-            height: 64,
-            borderRadius: "50%",
-            background: "#1a1a2e",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            margin: "0 auto 20px",
-            color: "#e8a33d",
-            fontSize: 28,
-          }}
-        >
-          🍽️
-        </div>
-        <h1 style={{ fontSize: 36, fontWeight: 800, color: "#1a1a2e", marginBottom: 8, letterSpacing: "-0.5px" }}>
+      <style>{`
+        @keyframes splashPop { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+        @keyframes splashLine { from { width: 0; } to { width: 50px; } }
+        @keyframes splashFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+      `}</style>
+      <div style={{ animation: "splashPop 0.9s cubic-bezier(0.22, 1, 0.36, 1)", textAlign: "center", padding: 20 }}>
+        <div style={{ fontSize: 52, marginBottom: 20, animation: "splashFade 0.8s ease 0.3s both" }}>🍽️</div>
+        <div style={{ fontFamily: "Georgia, serif", fontSize: 42, fontWeight: 700, color: "#fff", letterSpacing: 0.5, animation: "splashFade 0.8s ease 0.5s both" }}>
           Table Order
-        </h1>
-        <p style={{ fontSize: 16, color: "#6b6b7b" }}>
-          QR-based ordering system for restaurants
-        </p>
+        </div>
+        <div style={{ width: 50, height: 2, background: "#e8a33d", margin: "18px auto", animation: "splashLine 0.7s ease 0.7s both" }} />
+        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", letterSpacing: 2, textTransform: "uppercase", animation: "splashFade 0.8s ease 0.9s both" }}>
+          QR Based Ordering
+        </div>
       </div>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-          gap: 16,
-          width: "100%",
-          maxWidth: 560,
-        }}
-      >
-        {roles.map((role) => (
-          <Link
-            key={role.href}
-            href={role.href}
-            style={{ textDecoration: "none", color: "inherit" }}
-          >
-            <div
-              style={{
-                padding: 28,
-                background: "#fff",
-                borderRadius: 16,
-                border: "1px solid #e6e1d6",
-                display: "flex",
-                flexDirection: "column",
-                gap: 14,
-                cursor: "pointer",
-                transition: "all 0.2s ease",
-                boxShadow: "0 1px 3px rgba(20,20,30,0.05)",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = "translateY(-3px)";
-                e.currentTarget.style.boxShadow = "0 12px 40px rgba(0,0,0,0.1)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = "translateY(0)";
-                e.currentTarget.style.boxShadow = "0 1px 3px rgba(20,20,30,0.05)";
-              }}
-            >
-              <div
-                style={{
-                  width: 52,
-                  height: 52,
-                  borderRadius: 14,
-                  background: role.bg,
-                  color: role.color,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 24,
-                }}
-              >
-                {role.icon}
-              </div>
-              <div>
-                <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>{role.title}</div>
-                <div style={{ fontSize: 14, color: "#6b6b7b" }}>{role.subtitle}</div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: role.color, marginTop: 4 }}>
-                Open →
-              </div>
-            </div>
-          </Link>
-        ))}
-      </div>
-
-      <p style={{ marginTop: 48, fontSize: 13, color: "#a0a0a8" }}>
-        Built with Next.js & Firebase
-      </p>
     </div>
   );
 }
