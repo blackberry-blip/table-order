@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { db } from "@/lib/firebase";
 import { uploadToCloudinary } from "@/lib/cloudinary";
-import { useEffect, useState, useRef } from "react";
 import { playNotificationSound, requestNotificationPermission, showPopupNotification } from "@/lib/notifications";
 import {
   collection,
@@ -50,10 +49,12 @@ export default function ReceptionPage() {
   const [lastPendingCount, setLastPendingCount] = useState(0);
   const [lastBillCount, setLastBillCount] = useState(0);
   const [notifPermission, setNotifPermission] = useState(false);
-  const [uploadingImage, setUploadingImage] = useState(false);      // ← ADD
-  const [editUploading, setEditUploading] = useState(false);      // ← ADD
-  const fileInputRef = useRef(null);                                // ← ADD
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [editUploading, setEditUploading] = useState(false);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const fileInputRef = useRef(null);
   const editFileInputRef = useRef(null);
+  const logoFileInputRef = useRef(null);
 
   // === useEffects that don't depend on computed values ===
   useEffect(() => {
@@ -150,35 +151,57 @@ export default function ReceptionPage() {
     setLastBillCount(billRequested.length);
   }, [billRequested.length, lastBillCount]);
 
+  // === IMAGE UPLOAD FUNCTIONS ===
   async function handleImageUpload(file, isEdit = false) {
-  if (!file) return;
-   if (!file.type.startsWith("image/")) {
-     alert("Please select an image file");
-     return;
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      alert("Please select an image file");
+      return;
     }
-   if (file.size > 5 * 1024 * 1024) {
-    alert("Image must be under 5MB");
-     return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Image must be under 5MB");
+      return;
     }
 
-   if (isEdit) setEditUploading(true);
+    if (isEdit) setEditUploading(true);
     else setUploadingImage(true);
 
-   try {
-    const url = await uploadToCloudinary(file);
-    
-    if (isEdit) setEditForm((p) => ({ ...p, imageUrl: url }));
-    else setNewItem((p) => ({ ...p, imageUrl: url }));
-   } catch (err) {
-    alert("Upload failed: " + err.message);
-    console.error(err);
-   } finally {
-    if (isEdit) setEditUploading(false);
-    else setUploadingImage(false);
-   }
+    try {
+      const url = await uploadToCloudinary(file);
+      if (isEdit) setEditForm((p) => ({ ...p, imageUrl: url }));
+      else setNewItem((p) => ({ ...p, imageUrl: url }));
+    } catch (err) {
+      alert("Upload failed: " + err.message);
+      console.error(err);
+    } finally {
+      if (isEdit) setEditUploading(false);
+      else setUploadingImage(false);
+    }
   }
 
-  // === ALL functions ===
+  async function handleLogoUpload(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      alert("Please select an image file");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Image must be under 5MB");
+      return;
+    }
+    setLogoUploading(true);
+    try {
+      const url = await uploadToCloudinary(file);
+      setProfileForm((p) => ({ ...p, logoUrl: url }));
+    } catch (err) {
+      alert("Upload failed: " + err.message);
+      console.error(err);
+    } finally {
+      setLogoUploading(false);
+    }
+  }
+
+  // === ALL OTHER FUNCTIONS ===
   async function confirmOrder(id) {
     await updateDoc(doc(db, "orders", id), { status: "confirmed" });
   }
@@ -283,6 +306,7 @@ export default function ReceptionPage() {
       category: newItem.category,
       imageUrl: newItem.imageUrl,
       available: true,
+      featured: false,
       createdAt: Date.now(),
     });
     setNewItem({ name: "", description: "", price: "", category: CATEGORIES[0], imageUrl: "" });
@@ -299,6 +323,7 @@ export default function ReceptionPage() {
       price: parseFloat(editForm.price),
       category: editForm.category,
       imageUrl: editForm.imageUrl,
+      featured: editForm.featured ?? false,
     });
     setEditingId(null);
   }
@@ -306,7 +331,7 @@ export default function ReceptionPage() {
     await updateDoc(doc(db, "menuItems", item.id), { available: !item.available });
   }
   async function toggleFeatured(item) {
-  await updateDoc(doc(db, "menuItems", item.id), { featured: !item.featured });
+    await updateDoc(doc(db, "menuItems", item.id), { featured: !item.featured });
   }
   async function deleteItem(id) {
     if (!confirm("Delete this item?")) return;
@@ -474,7 +499,6 @@ export default function ReceptionPage() {
       <div>
         <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 20 }}>Orders</h2>
 
-        {/* Horizontal Tabs */}
         <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4, marginBottom: 24, borderBottom: "2px solid var(--border)" }}>
           {orderSections.map((section) => (
             <button
@@ -505,7 +529,6 @@ export default function ReceptionPage() {
           ))}
         </div>
 
-        {/* Tab Content */}
         <div>
           {currentSection.data.length === 0 ? (
             <div className="card" style={{ padding: 48, textAlign: "center", color: "var(--text-secondary)" }}>
@@ -589,53 +612,53 @@ export default function ReceptionPage() {
       <div className="card" style={{ padding: 24, marginBottom: 32 }}>
         <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>➕ Add New Item</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-             <input placeholder="Name" value={newItem.name} onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))} style={inputStyle} />
-             <input placeholder="Price (₹)" type="number" value={newItem.price} onChange={(e) => setNewItem((p) => ({ ...p, price: e.target.value }))} style={inputStyle} />
-             <select value={newItem.category} onChange={(e) => setNewItem((p) => ({ ...p, category: e.target.value }))} style={inputStyle}>
-              {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-             </select>
-          </div>
+          <input placeholder="Name" value={newItem.name} onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))} style={inputStyle} />
+          <input placeholder="Price (₹)" type="number" value={newItem.price} onChange={(e) => setNewItem((p) => ({ ...p, price: e.target.value }))} style={inputStyle} />
+          <select value={newItem.category} onChange={(e) => setNewItem((p) => ({ ...p, category: e.target.value }))} style={inputStyle}>
+            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
 
-           {/* IMAGE UPLOAD SECTION */}
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600, display: "block", marginBottom: 6 }}>Food Photo</label>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={(e) => handleImageUpload(e.target.files[0], false)}
-              style={{ display: "none" }}
-            />
+        {/* IMAGE UPLOAD SECTION */}
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600, display: "block", marginBottom: 6 }}>Food Photo</label>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={(e) => handleImageUpload(e.target.files[0], false)}
+            style={{ display: "none" }}
+          />
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <button
+            <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploadingImage}
               style={{
-              padding: "10px 18px",
-              borderRadius: 10,
-              border: "2px dashed var(--border)",
-              background: "var(--surface-2)",
-              color: "var(--text-secondary)",
-              fontSize: 14,
-              fontWeight: 600,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-            }}
+                padding: "10px 18px",
+                borderRadius: 10,
+                border: "2px dashed var(--border)",
+                background: "var(--surface-2)",
+                color: "var(--text-secondary)",
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
             >
-            {uploadingImage ? "⏳ Uploading..." : "📷 Choose Photo"}
+              {uploadingImage ? "⏳ Uploading..." : "📷 Choose Photo"}
             </button>
             {newItem.imageUrl && !uploadingImage && (
-            <img src={newItem.imageUrl} alt="Preview" style={{ width: 60, height: 60, borderRadius: 10, objectFit: "cover" }} />
+              <img src={newItem.imageUrl} alt="Preview" style={{ width: 60, height: 60, borderRadius: 10, objectFit: "cover" }} />
             )}
           </div>
           {newItem.imageUrl && (
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)", wordBreak: "break-all" }}>
-          {newItem.imageUrl}
+            <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)", wordBreak: "break-all" }}>
+              {newItem.imageUrl}
+            </div>
+          )}
         </div>
-       )}
-      </div>
         <input placeholder="Description (optional)" value={newItem.description} onChange={(e) => setNewItem((p) => ({ ...p, description: e.target.value }))} style={inputStyle} />
         <button className="btn btn-primary" onClick={addMenuItem} style={{ marginTop: 4 }}>+ Add Item</button>
       </div>
@@ -664,31 +687,31 @@ export default function ReceptionPage() {
                         </select>
                         <div>
                           <input
-                           ref={editFileInputRef}
-                           type="file"
-                           accept="image/*"
-                           onChange={(e) => handleImageUpload(e.target.files[0], true)}
-                          style={{ display: "none" }}
+                            ref={editFileInputRef}
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => handleImageUpload(e.target.files[0], true)}
+                            style={{ display: "none" }}
                           />
                           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                             <button
-                             onClick={() => editFileInputRef.current?.click()}
-                             disabled={editUploading}
-                             style={{
-                             padding: "8px 14px",
-                             borderRadius: 8,
-                             border: "2px dashed var(--border)",
-                             background: "var(--surface-2)",
-                             color: "var(--text-secondary)",
-                             fontSize: 13,
-                             fontWeight: 600,
-                             cursor: "pointer",
-                            }}
+                              onClick={() => editFileInputRef.current?.click()}
+                              disabled={editUploading}
+                              style={{
+                                padding: "8px 14px",
+                                borderRadius: 8,
+                                border: "2px dashed var(--border)",
+                                background: "var(--surface-2)",
+                                color: "var(--text-secondary)",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                cursor: "pointer",
+                              }}
                             >
-                            {editUploading ? "⏳..." : "📷 Change Photo"}
+                              {editUploading ? "⏳..." : "📷 Change Photo"}
                             </button>
                             {editForm.imageUrl && !editUploading && (
-                            <img src={editForm.imageUrl} alt="Preview" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover" }} />
+                              <img src={editForm.imageUrl} alt="Preview" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover" }} />
                             )}
                           </div>
                         </div>
@@ -700,30 +723,29 @@ export default function ReceptionPage() {
                       </div>
                     ) : (
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                         <div>
-                            <div style={{ fontWeight: 700, fontSize: 15, opacity: item.available ? 1 : 0.5 }}>{item.name}</div>
-                            <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>₹{item.price} · {item.description}</div>
-                          </div>
-                          <div style={{ display: "flex", gap: 6 }}>
-                               {/* ⭐ FEATURED TOGGLE */}
-                              <button 
-                                     className="btn btn-sm" 
-                                     onClick={() => toggleFeatured(item)}
-                                     style={{ 
-                                              background: item.featured ? "#e8a33d20" : "var(--surface-2)", 
-                                              color: item.featured ? "#92400e" : "var(--text-secondary)", 
-                                              border: "none",
-                                              fontWeight: item.featured ? 700 : 500,
-                                             }}
-                                             >
-                                    {item.featured ? "★ Featured" : "☆ Feature"}
-                               </button>
-                              <button className="btn btn-sm" onClick={() => toggleAvailable(item)} style={{ background: item.available ? "var(--success-light)" : "var(--warning-light)", color: item.available ? "#166534" : "#92400e", border: "none" }}>
-                                {item.available ? "Available" : "Out of Stock"}
-                              </button>
-                              <button className="btn btn-sm btn-ghost" onClick={() => startEdit(item)}>Edit</button>
-                              <button className="btn btn-sm btn-ghost" onClick={() => deleteItem(item.id)} style={{ color: "var(--danger)" }}>Delete</button>
-                          </div>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 15, opacity: item.available ? 1 : 0.5 }}>{item.name}</div>
+                          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>₹{item.price} · {item.description}</div>
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => toggleFeatured(item)}
+                            style={{
+                              background: item.featured ? "#e8a33d20" : "var(--surface-2)",
+                              color: item.featured ? "#92400e" : "var(--text-secondary)",
+                              border: "none",
+                              fontWeight: item.featured ? 700 : 500,
+                            }}
+                          >
+                            {item.featured ? "★ Featured" : "☆ Feature"}
+                          </button>
+                          <button className="btn btn-sm" onClick={() => toggleAvailable(item)} style={{ background: item.available ? "var(--success-light)" : "var(--warning-light)", color: item.available ? "#166534" : "#92400e", border: "none" }}>
+                            {item.available ? "Available" : "Out of Stock"}
+                          </button>
+                          <button className="btn btn-sm btn-ghost" onClick={() => startEdit(item)}>Edit</button>
+                          <button className="btn btn-sm btn-ghost" onClick={() => deleteItem(item.id)} style={{ color: "var(--danger)" }}>Delete</button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -780,11 +802,46 @@ export default function ReceptionPage() {
           <input value={profileForm.name || ""} onChange={(e) => setProfileForm((p) => ({ ...p, name: e.target.value }))} style={inputStyle} />
           <label style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600 }}>Tagline</label>
           <input value={profileForm.tagline || ""} onChange={(e) => setProfileForm((p) => ({ ...p, tagline: e.target.value }))} style={inputStyle} />
-          <label style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600 }}>Logo Image URL</label>
-          <input value={profileForm.logoUrl || ""} onChange={(e) => setProfileForm((p) => ({ ...p, logoUrl: e.target.value }))} placeholder="https://..." style={inputStyle} />
+
+          {/* LOGO UPLOAD */}
+          <label style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600, display: "block", marginBottom: 6 }}>Logo</label>
+          <input
+            ref={logoFileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={(e) => handleLogoUpload(e.target.files[0])}
+            style={{ display: "none" }}
+          />
+          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10 }}>
+            <button
+              onClick={() => logoFileInputRef.current?.click()}
+              disabled={logoUploading}
+              style={{
+                padding: "10px 18px",
+                borderRadius: 10,
+                border: "2px dashed var(--border)",
+                background: "var(--surface-2)",
+                color: "var(--text-secondary)",
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              {logoUploading ? "⏳ Uploading..." : "📷 Upload Logo"}
+            </button>
+            {profileForm.logoUrl && !logoUploading && (
+              <img src={profileForm.logoUrl} alt="Logo Preview" style={{ width: 48, height: 48, borderRadius: "50%", objectFit: "cover" }} />
+            )}
+          </div>
           {profileForm.logoUrl && (
-            <img src={profileForm.logoUrl} alt="Preview" style={{ width: 64, height: 64, borderRadius: "50%", objectFit: "cover", marginBottom: 12 }} />
+            <div style={{ marginBottom: 12, fontSize: 12, color: "var(--text-secondary)", wordBreak: "break-all" }}>
+              {profileForm.logoUrl}
+            </div>
           )}
+
           <button className="btn btn-primary" onClick={saveProfile}>
             {savedMsg ? "Saved ✓" : "Save Profile"}
           </button>
