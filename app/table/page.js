@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase";
 import {
@@ -13,6 +13,195 @@ import {
   where,
   orderBy,
 } from "firebase/firestore";
+
+// ---------------------------------------------------------------------------
+// Config / helpers (module scope so they aren't recreated every render)
+// ---------------------------------------------------------------------------
+
+// How many items show in the horizontally-scrollable "Popular Picks" strip
+// before the rest get tucked behind "View All".
+const POPULAR_LIMIT = 8;
+
+// Emoji fallback per category. Add/rename freely to match your menu.
+// This covers a much wider spread of categories you'd see on a typical
+// mid-range Indian hotel/restaurant menu (not just the original 5).
+const CATEGORY_ICONS = {
+  All: "🍽️",
+  Starters: "🥗",
+  "Soups": "🍲",
+  Soup: "🍲",
+  Salads: "🥙",
+  Salad: "🥙",
+  Mains: "🍛",
+  "Main Course": "🍛",
+  "North Indian": "🍛",
+  "South Indian": "🥞",
+  Chinese: "🥡",
+  "Indo Chinese": "🥡",
+  Tandoor: "🍢",
+  Tandoori: "🍢",
+  Biryani: "🍚",
+  "Breads & Rice": "🍞",
+  Breads: "🫓",
+  Bread: "🫓",
+  Rice: "🍚",
+  Rolls: "🌯",
+  Wraps: "🌯",
+  Sandwiches: "🥪",
+  Pizza: "🍕",
+  Continental: "🍝",
+  Pasta: "🍝",
+  Sizzlers: "🔥",
+  Chaat: "🥘",
+  "Pan Asian": "🍜",
+  Noodles: "🍜",
+  Seafood: "🦐",
+  Grill: "🍖",
+  "BBQ": "🍖",
+  Beverages: "🥤",
+  Drinks: "🥤",
+  Mocktails: "🍹",
+  Shakes: "🥤",
+  "Milkshakes": "🥤",
+  Juices: "🧃",
+  Desserts: "🍰",
+  "Ice Cream": "🍨",
+  "Live Counter": "👨‍🍳",
+  Combos: "🍱",
+  "Kids Menu": "🧒",
+};
+
+// Returns either { type: "emoji", value } or, if the restaurant has uploaded
+// a custom icon for that category (see notes below), { type: "image", src }.
+function getCategoryIcon(cat, customIcons) {
+  if (customIcons && customIcons[cat]) {
+    return { type: "image", src: customIcons[cat] };
+  }
+  return { type: "emoji", value: CATEGORY_ICONS[cat] || "🍴" };
+}
+
+// Rotating, non-repeating (until the cycle is exhausted) humour-ish quotes
+// for the rewards strip. Feel free to edit/add — order is shuffled per cycle.
+const REWARD_QUOTES = [
+  "Good food, good mood, good rewards.",
+  "Calories don't count when points are involved.",
+  "Behind every great meal is an even greater discount.",
+  "Order now, brag about it later.",
+  "Hungry today, rewarded tomorrow.",
+  "First rule of foodie club: always order dessert.",
+  "Chew slowly, earn quickly.",
+  "Warning: extreme deliciousness may cause repeat orders.",
+  "Every bite counts — literally, towards your rewards.",
+  "Eat well. Reward better.",
+  "Patience is a virtue, but so is ordering dessert first.",
+  "The best things in life are fried, and free with points.",
+  "A balanced diet is a starter in each hand.",
+  "Great appetite, greater rewards.",
+];
+
+// Shuffle-bag: pulls quotes without repeats until the whole list is used,
+// then reshuffles and starts a fresh cycle. Persists across page loads.
+function getNextRewardQuote() {
+  if (typeof window === "undefined") return REWARD_QUOTES[0];
+  try {
+    const stored = window.localStorage.getItem("rewardQuoteBag");
+    let bag = stored ? JSON.parse(stored) : [];
+    if (!Array.isArray(bag) || bag.length === 0) {
+      bag = REWARD_QUOTES.map((_, i) => i);
+      for (let i = bag.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [bag[i], bag[j]] = [bag[j], bag[i]];
+      }
+    }
+    const nextIndex = bag.pop();
+    window.localStorage.setItem("rewardQuoteBag", JSON.stringify(bag));
+    return REWARD_QUOTES[nextIndex];
+  } catch {
+    return REWARD_QUOTES[Math.floor(Math.random() * REWARD_QUOTES.length)];
+  }
+}
+
+// Shared card used by both the Popular Picks strip and the full grid, so the
+// two layouts always stay visually identical.
+function MenuCard({ item, qty, onAdd, width }) {
+  return (
+    <div
+      style={{
+        background: "#fff",
+        borderRadius: 16,
+        overflow: "hidden",
+        boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+        border: "1px solid #f0f0f0",
+        flexShrink: width ? 0 : undefined,
+        width: width || "auto",
+      }}
+    >
+      <div style={{ position: "relative", height: 140, background: "#f8f6f3" }}>
+        {item.imageUrl ? (
+          <img
+            src={item.imageUrl}
+            alt={item.name}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            loading="eager"
+          />
+        ) : (
+          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 40 }}>
+            🍽️
+          </div>
+        )}
+        <button
+          onClick={onAdd}
+          style={{
+            position: "absolute",
+            bottom: -16,
+            right: 12,
+            width: 36,
+            height: 36,
+            borderRadius: "50%",
+            border: "none",
+            background: "#e8a33d",
+            color: "#fff",
+            fontSize: 20,
+            fontWeight: 700,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: "0 2px 8px rgba(232,163,61,0.4)",
+          }}
+        >
+          +
+        </button>
+      </div>
+      <div style={{ padding: "20px 12px 12px" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: "#1a1a2e", marginBottom: 2, lineHeight: 1.3 }}>{item.name}</div>
+        <div style={{ fontSize: 12, color: "#888", marginBottom: 8, lineHeight: 1.3, minHeight: 16 }}>
+          {item.description?.slice(0, 30)}
+          {item.description?.length > 30 ? "..." : ""}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontWeight: 800, fontSize: 16, color: "#e8a33d" }}>₹{item.price}</span>
+          {qty > 0 && (
+            <span
+              style={{
+                background: "#1a1a2e",
+                color: "#fff",
+                padding: "2px 10px",
+                borderRadius: 100,
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              {qty}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 function TableContent() {
   const searchParams = useSearchParams();
@@ -31,6 +220,12 @@ function TableContent() {
   const [lastOrderStatus, setLastOrderStatus] = useState(null);
   const [heroIndex, setHeroIndex] = useState(0);
   const [heroItems, setHeroItems] = useState([]);
+
+  // --- new state for this update ---
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showAllPopular, setShowAllPopular] = useState(false);
+  const [rewardQuote, setRewardQuote] = useState(REWARD_QUOTES[0]);
+  const heroScrollRef = useRef(null);
 
   // Tick timer
   useEffect(() => {
@@ -86,18 +281,46 @@ function TableContent() {
     return () => unsub();
   }, [tableNo, lastOrderStatus]);
 
-  // Hero auto-slide
+  // Hero auto-slide (now drives an actual scrollable strip, not opacity fades)
   useEffect(() => {
     if (heroItems.length <= 1) return;
     const t = setInterval(() => {
-      setHeroIndex((prev) => (prev + 1) % heroItems.length);
+      setHeroIndex((prev) => {
+        const next = (prev + 1) % heroItems.length;
+        const el = heroScrollRef.current;
+        if (el) el.scrollTo({ left: next * el.clientWidth, behavior: "smooth" });
+        return next;
+      });
     }, 4000);
     return () => clearInterval(t);
   }, [heroItems.length]);
 
+  // Pick a reward quote once per page load (won't repeat until the full list cycles)
+  useEffect(() => {
+    setRewardQuote(getNextRewardQuote());
+  }, []);
+
+  function handleHeroScroll(e) {
+    const el = e.currentTarget;
+    if (!el.clientWidth) return;
+    const idx = Math.round(el.scrollLeft / el.clientWidth);
+    if (idx !== heroIndex) setHeroIndex(idx);
+  }
+
+  function scrollHeroTo(idx) {
+    setHeroIndex(idx);
+    const el = heroScrollRef.current;
+    if (el) el.scrollTo({ left: idx * el.clientWidth, behavior: "smooth" });
+  }
+
   const availableItems = menuItems.filter((m) => m.available);
   const categories = ["All", ...new Set(availableItems.map((m) => m.category))];
   const filteredItems = activeCategory === "All" ? availableItems : availableItems.filter((m) => m.category === activeCategory);
+
+  const isSearching = searchQuery.trim().length > 0;
+  const searchResults = isSearching
+    ? availableItems.filter((m) => m.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    : [];
 
   function findItem(id) {
     return menuItems.find((m) => m.id === id);
@@ -447,11 +670,18 @@ function TableContent() {
   // ---------- MENU — DAIRY QUEEN STYLE ----------
   return (
     <div style={{ minHeight: "100vh", background: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", paddingBottom: 100 }}>
-      {/* Sticky Header */}
-      <div style={{ background: "#fff", position: "sticky", top: 0, zIndex: 10, borderBottom: "1px solid #f0f0f0" }}>
+      {/* hides the scrollbar track on Chrome/Safari for our horizontal strips;
+          scrollbarWidth:"none" (set inline below) covers Firefox */}
+      <style jsx>{`
+        .hscroll::-webkit-scrollbar {
+          display: none;
+        }
+      `}</style>
+
+      {/* Full-bleed Banner (logo left, table number right) */}
+      <div style={{ background: "linear-gradient(135deg, #fff5e0 0%, #fef3c7 100%)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ maxWidth: 480, margin: "0 auto", padding: "16px 20px" }}>
-          {/* Logo + Table Info */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               {profile?.logoUrl ? (
                 <img src={profile.logoUrl} alt="logo" style={{ width: 48, height: 48, borderRadius: 12, objectFit: "cover" }} />
@@ -460,215 +690,281 @@ function TableContent() {
                   {profile?.name?.charAt(0) || "T"}
                 </div>
               )}
-              <div>
-                <div style={{ fontWeight: 800, fontSize: 20, color: "#1a1a2e" }}>{profile?.name || "Menu"}</div>
-              </div>
+              <div style={{ fontWeight: 800, fontSize: 20, color: "#1a1a2e" }}>{profile?.name || "Menu"}</div>
             </div>
-            {addingMore && (
-              <button
-                onClick={() => { setAddingMore(false); setCart({}); }}
-                style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 14, fontWeight: 600 }}
-              >
-                ← Back
-              </button>
-            )}
+
+            <div
+              style={{
+                background: "#1a1a2e",
+                color: "#fff",
+                padding: "8px 14px",
+                borderRadius: 100,
+                fontSize: 13,
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                whiteSpace: "nowrap",
+              }}
+            >
+              <span>📍</span> Table {tableNo}
+            </div>
           </div>
 
-          {/* Order to Table X — DQ Style Location Bar */}
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "12px 16px",
-            background: "#f8f6f3",
-            borderRadius: 14,
-            marginBottom: 16,
-          }}>
-            <span style={{ fontSize: 18 }}>📍</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>Order to</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>Table {tableNo}</div>
-            </div>
-          </div>
+          {addingMore && (
+            <button
+              onClick={() => { setAddingMore(false); setCart({}); }}
+              style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 13, fontWeight: 600, marginTop: 10, padding: 0 }}
+            >
+              ← Back to order status
+            </button>
+          )}
         </div>
       </div>
 
       <div style={{ maxWidth: 480, margin: "0 auto" }}>
-        {/* Hero Slider — Today's Special */}
-        {heroItems.length > 0 && !addingMore && (
-          <div style={{ padding: "20px 20px 0", position: "relative" }}>
-            <div style={{ borderRadius: 20, overflow: "hidden", position: "relative", height: 200, background: "#1a1a2e" }}>
-              {heroItems.map((item, idx) => (
-                <div
-                  key={item.id}
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    opacity: idx === heroIndex ? 1 : 0,
-                    transition: "opacity 0.6s ease",
-                    display: "flex",
-                    alignItems: "flex-end",
-                  }}
-                >
-                  <img
-                    src={item.imageUrl}
-                    alt={item.name}
-                    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7 }}
-                  />
-                  <div style={{ position: "relative", zIndex: 2, padding: 20, width: "100%", background: "linear-gradient(transparent, rgba(0,0,0,0.7))" }}>
-                    <div style={{ color: "#fff", fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{item.name}</div>
-                    <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13, marginBottom: 10 }}>{item.description || "Chef's special pick"}</div>
-                    <button
-                      onClick={() => {
-                        changeQty(item.id, 1);
-                        setShowCartSummary(true);
-                      }}
-                      style={{
-                        padding: "8px 20px",
-                        borderRadius: 50,
-                        border: "none",
-                        background: "#e8a33d",
-                        color: "#1a1a2e",
-                        fontWeight: 700,
-                        fontSize: 14,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Order Now →
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {/* Dots */}
-              <div style={{ position: "absolute", bottom: 12, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 6, zIndex: 3 }}>
-                {heroItems.map((_, idx) => (
-                  <div key={idx} style={{ width: 8, height: 8, borderRadius: "50%", background: idx === heroIndex ? "#e8a33d" : "rgba(255,255,255,0.4)" }} />
+        {/* Search bar (replaces the old "Deliver to" bar) */}
+        <div style={{ padding: "16px 20px 0" }}>
+          <div style={{ position: "relative" }}>
+            <span style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", fontSize: 15, color: "#aaa" }}>🔍</span>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search for dishes..."
+              style={{
+                width: "100%",
+                padding: "12px 16px 12px 42px",
+                borderRadius: 14,
+                border: "none",
+                background: "#f8f6f3",
+                fontSize: 14,
+                outline: "none",
+                boxSizing: "border-box",
+                color: "#1a1a2e",
+              }}
+            />
+          </div>
+        </div>
+
+        {isSearching ? (
+          // ---------- Search results ----------
+          <div style={{ padding: "20px 20px 24px" }}>
+            <h2 style={{ fontSize: 18, fontWeight: 800, color: "#1a1a2e", marginBottom: 16 }}>
+              Results for &ldquo;{searchQuery}&rdquo;
+            </h2>
+            {searchResults.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "#888" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>🔍</div>
+                <p>No dishes match your search.</p>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
+                {searchResults.map((it) => (
+                  <MenuCard key={it.id} item={it} qty={cart[it.id] || 0} onAdd={() => changeQty(it.id, 1)} />
                 ))}
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Category Icons — DQ Style */}
-        <div style={{ padding: "20px 20px 0" }}>
-          <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8, scrollbarWidth: "none" }}>
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setActiveCategory(cat)}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "10px 14px",
-                  borderRadius: 16,
-                  border: "none",
-                  background: activeCategory === cat ? "#1a1a2e" : "#f8f6f3",
-                  color: activeCategory === cat ? "#fff" : "#666",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
-                  minWidth: 70,
-                }}
-              >
-                <span style={{ fontSize: 24 }}>
-                  {cat === "All" ? "🍽️" : cat === "Starters" ? "🥗" : cat === "Mains" ? "🍛" : cat === "Breads & Rice" ? "🍞" : cat === "Beverages" ? "🥤" : cat === "Desserts" ? "🍰" : "🍴"}
-                </span>
-                <span>{cat === "Breads & Rice" ? "Breads" : cat}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Popular Picks / Menu Grid */}
-        <div style={{ padding: "24px 20px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e" }}>{activeCategory === "All" ? "Popular Picks" : activeCategory}</h2>
-            {activeCategory !== "All" && (
-              <button onClick={() => setActiveCategory("All")} style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>
-                View All →
-              </button>
             )}
           </div>
-
-          {filteredItems.length === 0 && (
-            <div style={{ textAlign: "center", padding: 40, color: "#888" }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>🍽️</div>
-              <p>No items in this category.</p>
-            </div>
-          )}
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
-            {filteredItems.map((it) => (
-              <div key={it.id} style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,0.06)", border: "1px solid #f0f0f0" }}>
-                <div style={{ position: "relative", height: 140, background: "#f8f6f3" }}>
-                  {it.imageUrl ? (
-                    <img
-                      src={it.imageUrl}
-                      alt={it.name}
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                      loading="eager"
-                    />
-                  ) : (
-                    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 40 }}>
-                      🍽️
-                    </div>
-                  )}
-                  {/* Quick Add Button */}
-                  <button
-                    onClick={() => changeQty(it.id, 1)}
-                    style={{
-                      position: "absolute",
-                      bottom: -16,
-                      right: 12,
-                      width: 36,
-                      height: 36,
-                      borderRadius: "50%",
-                      border: "none",
-                      background: "#e8a33d",
-                      color: "#fff",
-                      fontSize: 20,
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      boxShadow: "0 2px 8px rgba(232,163,61,0.4)",
-                    }}
-                  >
-                    +
-                  </button>
-                </div>
-                <div style={{ padding: "20px 12px 12px" }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: "#1a1a2e", marginBottom: 2, lineHeight: 1.3 }}>{it.name}</div>
-                  <div style={{ fontSize: 12, color: "#888", marginBottom: 8, lineHeight: 1.3, minHeight: 16 }}>
-                    {it.description?.slice(0, 30)}{it.description?.length > 30 ? "..." : ""}
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontWeight: 800, fontSize: 16, color: "#e8a33d" }}>₹{it.price}</span>
-                    {cart[it.id] > 0 && (
-                      <span style={{
+        ) : (
+          <>
+            {/* Hero Slider — hand-swipeable, ratio matched to reference (5:4) */}
+            {heroItems.length > 0 && !addingMore && (
+              <div style={{ padding: "20px 20px 0" }}>
+                <div
+                  ref={heroScrollRef}
+                  onScroll={handleHeroScroll}
+                  className="hscroll"
+                  style={{
+                    display: "flex",
+                    overflowX: "auto",
+                    scrollSnapType: "x mandatory",
+                    borderRadius: 20,
+                    WebkitOverflowScrolling: "touch",
+                    scrollbarWidth: "none",
+                  }}
+                >
+                  {heroItems.map((item) => (
+                    <div
+                      key={item.id}
+                      style={{
+                        flex: "0 0 100%",
+                        scrollSnapAlign: "start",
+                        position: "relative",
+                        aspectRatio: "5 / 4",
                         background: "#1a1a2e",
-                        color: "#fff",
-                        padding: "2px 10px",
-                        borderRadius: 100,
-                        fontSize: 12,
-                        fontWeight: 700,
-                      }}>
-                        {cart[it.id]}
-                      </span>
-                    )}
-                  </div>
+                      }}
+                    >
+                      <img
+                        src={item.imageUrl}
+                        alt={item.name}
+                        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7 }}
+                      />
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          display: "flex",
+                          alignItems: "flex-end",
+                          background: "linear-gradient(transparent, rgba(0,0,0,0.7))",
+                        }}
+                      >
+                        <div style={{ padding: 20, width: "100%" }}>
+                          <div style={{ color: "#fff", fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{item.name}</div>
+                          <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13, marginBottom: 10 }}>
+                            {item.description || "Chef's special pick"}
+                          </div>
+                          <button
+                            onClick={() => {
+                              changeQty(item.id, 1);
+                              setShowCartSummary(true);
+                            }}
+                            style={{
+                              padding: "8px 20px",
+                              borderRadius: 50,
+                              border: "none",
+                              background: "#e8a33d",
+                              color: "#1a1a2e",
+                              fontWeight: 700,
+                              fontSize: 14,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Order Now →
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
+                {heroItems.length > 1 && (
+                  <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 10 }}>
+                    {heroItems.map((_, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => scrollHeroTo(idx)}
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: "50%",
+                          background: idx === heroIndex ? "#e8a33d" : "#ddd",
+                          cursor: "pointer",
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
-        </div>
+            )}
+
+            {/* Category Icons — expanded set, horizontally scrollable */}
+            <div style={{ padding: "20px 20px 0" }}>
+              <div className="hscroll" style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8, scrollbarWidth: "none" }}>
+                {categories.map((cat) => {
+                  const icon = getCategoryIcon(cat, profile?.categoryIcons);
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => setActiveCategory(cat)}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "10px 14px",
+                        borderRadius: 16,
+                        border: "none",
+                        background: activeCategory === cat ? "#1a1a2e" : "#f8f6f3",
+                        color: activeCategory === cat ? "#fff" : "#666",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        transition: "all 0.15s ease",
+                        minWidth: 70,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {icon.type === "image" ? (
+                        <img src={icon.src} alt={cat} style={{ width: 24, height: 24, objectFit: "contain" }} />
+                      ) : (
+                        <span style={{ fontSize: 24 }}>{icon.value}</span>
+                      )}
+                      <span>{cat === "Breads & Rice" ? "Breads" : cat}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Popular Picks (horizontal strip) / Category Grid */}
+            <div style={{ padding: "24px 20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e" }}>
+                  {activeCategory === "All" ? "Popular Picks" : activeCategory}
+                </h2>
+
+                {activeCategory === "All" && availableItems.length > POPULAR_LIMIT && (
+                  <button
+                    onClick={() => setShowAllPopular((v) => !v)}
+                    style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}
+                  >
+                    {showAllPopular ? "← Show Less" : "View All →"}
+                  </button>
+                )}
+                {activeCategory !== "All" && (
+                  <button
+                    onClick={() => setActiveCategory("All")}
+                    style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}
+                  >
+                    View All →
+                  </button>
+                )}
+              </div>
+
+              {filteredItems.length === 0 && (
+                <div style={{ textAlign: "center", padding: 40, color: "#888" }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>🍽️</div>
+                  <p>No items in this category.</p>
+                </div>
+              )}
+
+              {activeCategory === "All" && !showAllPopular ? (
+                <div className="hscroll" style={{ display: "flex", gap: 14, overflowX: "auto", paddingBottom: 8, scrollbarWidth: "none" }}>
+                  {filteredItems.slice(0, POPULAR_LIMIT).map((it) => (
+                    <MenuCard key={it.id} item={it} qty={cart[it.id] || 0} onAdd={() => changeQty(it.id, 1)} width={150} />
+                  ))}
+                </div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
+                  {filteredItems.map((it) => (
+                    <MenuCard key={it.id} item={it} qty={cart[it.id] || 0} onAdd={() => changeQty(it.id, 1)} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Rewards strip — rotating quote instead of a fixed line */}
+            <div style={{ padding: "0 20px 24px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  padding: "16px 18px",
+                  borderRadius: 18,
+                  background: "linear-gradient(135deg, #1a1a2e 0%, #2d2b52 100%)",
+                  color: "#fff",
+                }}
+              >
+                <div style={{ fontSize: 28 }}>🎁</div>
+                <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.4 }}>{rewardQuote}</div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Fixed Bottom — Cart Button Only */}
+      {/* Fixed Bottom — Cart Button Only (left exactly as-is, per your note) */}
       {(count > 0 || order) && (
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
           <button
