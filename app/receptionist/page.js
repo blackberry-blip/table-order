@@ -20,6 +20,7 @@ import {
   getDocs,
   where,
 } from "firebase/firestore";
+import { serverTimestamp } from "firebase/firestore";
 
 const DEFAULT_CATEGORIES = ["Starters", "Mains", "Breads & Rice", "Continental", "Beverages", "Desserts"];
 
