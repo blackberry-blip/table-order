@@ -60,6 +60,7 @@ export default function ReceptionPage() {
   const [siteUrl, setSiteUrl] = useState("");
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [lastPendingCount, setLastPendingCount] = useState(0);
   const [lastBillCount, setLastBillCount] = useState(0);
   const [notifPermission, setNotifPermission] = useState(false);
@@ -72,6 +73,10 @@ export default function ReceptionPage() {
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategory, setNewCategory] = useState({ name: "", imageUrl: "" });
   const [categoryUploading, setCategoryUploading] = useState(false);
+  const [editingCategoryId, setEditingCategoryId] = useState(null);
+  const [editCategoryForm, setEditCategoryForm] = useState({ name: "", imageUrl: "" });
+  const [editCategoryUploading, setEditCategoryUploading] = useState(false);
+  const editCategoryFileInputRef = useRef(null);
   const [showSplash, setShowSplash] = useState(false);
   const [splashLeaving, setSplashLeaving] = useState(false);
   const fileInputRef = useRef(null);
@@ -80,17 +85,9 @@ export default function ReceptionPage() {
   const categoryFileInputRef = useRef(null);
   const seededCategories = useRef(false);
 
-  // === SPLASH ANIMATION (once per browser session) ===
+  // === SPLASH ANIMATION (shows on every load/refresh) ===
   useEffect(() => {
-    try {
-      const seen = sessionStorage.getItem("to_splash_seen");
-      if (!seen) {
-        setShowSplash(true);
-        sessionStorage.setItem("to_splash_seen", "1");
-      }
-    } catch (e) {
-      setShowSplash(true);
-    }
+    setShowSplash(true);
   }, []);
 
   useEffect(() => {
@@ -317,6 +314,28 @@ export default function ReceptionPage() {
     }
   }
 
+  async function handleEditCategoryImageUpload(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      alert("Please select an image file");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Image must be under 5MB");
+      return;
+    }
+    setEditCategoryUploading(true);
+    try {
+      const url = await uploadToCloudinary(file);
+      setEditCategoryForm((p) => ({ ...p, imageUrl: url }));
+    } catch (err) {
+      alert("Upload failed: " + err.message);
+      console.error(err);
+    } finally {
+      setEditCategoryUploading(false);
+    }
+  }
+
   // === ALL OTHER FUNCTIONS ===
   async function confirmOrder(id) {
     await updateDoc(doc(db, "orders", id), { status: "confirmed" });
@@ -439,6 +458,36 @@ export default function ReceptionPage() {
     if (menuTab === cat.name) setMenuTab("all");
   }
 
+  function startEditCategory(cat) {
+    setEditingCategoryId(cat.id);
+    setEditCategoryForm({ name: cat.name, imageUrl: cat.imageUrl || "" });
+    setShowAddCategory(false);
+  }
+
+  async function saveEditCategory() {
+    const cat = categories.find((c) => c.id === editingCategoryId);
+    if (!cat) return;
+    const newName = editCategoryForm.name.trim();
+    if (!newName) return alert("Category name can't be empty");
+    if (
+      newName.toLowerCase() !== cat.name.toLowerCase() &&
+      categories.some((c) => c.name.toLowerCase() === newName.toLowerCase())
+    ) {
+      return alert("Another category already has that name");
+    }
+    await updateDoc(doc(db, "categories", cat.id), {
+      name: newName,
+      imageUrl: editCategoryForm.imageUrl,
+    });
+    // Keep menu items pointed at the renamed category
+    if (newName !== cat.name) {
+      const itemsToUpdate = menuItems.filter((m) => m.category === cat.name);
+      await Promise.all(itemsToUpdate.map((m) => updateDoc(doc(db, "menuItems", m.id), { category: newName })));
+      if (menuTab === cat.name) setMenuTab(newName);
+    }
+    setEditingCategoryId(null);
+  }
+
   async function addMenuItem() {
     if (!newItem.name || !newItem.price) return alert("Name and price are required");
     if (!newItem.category) return alert("Please choose a category (add one first if the list is empty)");
@@ -542,8 +591,8 @@ export default function ReceptionPage() {
   }
 
   // === STYLES & COMPONENTS ===
-  const inputStyle = { width: "100%", padding: "11px 14px", border: "1px solid var(--border)", borderRadius: 10, fontSize: 14, marginBottom: 12, background: "var(--surface)", fontFamily: "inherit", boxSizing: "border-box" };
-  const labelStyle = { fontSize: 12, color: "var(--text-secondary)", fontWeight: 700, display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 };
+  const inputStyle = { width: "100%", padding: "11px 14px", border: "1px solid var(--border, #e6e1d6)", borderRadius: 10, fontSize: 14, marginBottom: 12, background: "var(--surface, #ffffff)", fontFamily: "inherit", boxSizing: "border-box" };
+  const labelStyle = { fontSize: 12, color: "var(--text-secondary, #6b6b7b)", fontWeight: 700, display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 };
 
   const StatCard = ({ label, value, color, icon, sub }) => (
     <div className="card" style={{ padding: 20, display: "flex", alignItems: "center", gap: 16, borderRadius: 16 }}>
@@ -552,8 +601,8 @@ export default function ReceptionPage() {
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.1 }}>{value}</div>
-        <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginTop: 4, fontWeight: 600 }}>{label}</div>
-        {sub && <div style={{ fontSize: 11, color: "var(--text-secondary)", opacity: 0.8, marginTop: 2 }}>{sub}</div>}
+        <div style={{ fontSize: 12.5, color: "var(--text-secondary, #6b6b7b)", marginTop: 4, fontWeight: 600 }}>{label}</div>
+        {sub && <div style={{ fontSize: 11, color: "var(--text-secondary, #6b6b7b)", opacity: 0.8, marginTop: 2 }}>{sub}</div>}
       </div>
     </div>
   );
@@ -567,14 +616,14 @@ export default function ReceptionPage() {
           </div>
           <span style={{ fontWeight: 700, fontSize: 14.5 }}>Table {order.table}</span>
         </div>
-        <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
+        <span style={{ fontSize: 11.5, color: "var(--text-secondary, #6b6b7b)" }}>
           {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
       </div>
       {order.items.map((it, i) => (
         <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, padding: "3px 0" }}>
           <span>{it.name}</span>
-          <span style={{ color: "var(--text-secondary)" }}>×{it.qty}</span>
+          <span style={{ color: "var(--text-secondary, #6b6b7b)" }}>×{it.qty}</span>
         </div>
       ))}
       {order.status === "preparing" && getCountdown(order) && (
@@ -595,7 +644,7 @@ export default function ReceptionPage() {
       <div>
         <div style={{ marginBottom: 24 }}>
           <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 2, fontFamily: "'Fraunces', serif" }}>Today at {profile?.name || "your restaurant"}</h2>
-          <p style={{ fontSize: 13.5, color: "var(--text-secondary)", margin: 0 }}>{new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p>
+          <p style={{ fontSize: 13.5, color: "var(--text-secondary, #6b6b7b)", margin: 0 }}>{new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 14, marginBottom: 30 }}>
@@ -608,10 +657,10 @@ export default function ReceptionPage() {
         <div className="card" style={{ borderRadius: 18, overflow: "hidden" }}>
           <div style={{ padding: "18px 20px 0" }}>
             <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>Live Orders</h3>
-            <p style={{ fontSize: 12.5, color: "var(--text-secondary)", margin: "3px 0 16px" }}>Every stage of service, with one-tap actions.</p>
+            <p style={{ fontSize: 12.5, color: "var(--text-secondary, #6b6b7b)", margin: "3px 0 16px" }}>Every stage of service, with one-tap actions.</p>
           </div>
 
-          <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "0 20px 14px", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "0 20px 14px", borderBottom: "1px solid var(--border, #e6e1d6)" }}>
             {ORDER_SECTIONS.map((section) => {
               const count = orderDataByKey[section.key].length;
               const isActive = orderFilter === section.key;
@@ -623,8 +672,8 @@ export default function ReceptionPage() {
                     padding: "10px 16px",
                     borderRadius: 10,
                     border: "none",
-                    background: isActive ? section.color : "var(--surface-2)",
-                    color: isActive ? "#fff" : "var(--text-secondary)",
+                    background: isActive ? section.color : "var(--surface-2, #f3efe6)",
+                    color: isActive ? "#fff" : "var(--text-secondary, #6b6b7b)",
                     fontSize: 13.5,
                     fontWeight: 700,
                     whiteSpace: "nowrap",
@@ -649,7 +698,7 @@ export default function ReceptionPage() {
 
           <div style={{ padding: 20 }}>
             {currentData.length === 0 ? (
-              <div style={{ padding: 44, textAlign: "center", color: "var(--text-secondary)" }}>
+              <div style={{ padding: 44, textAlign: "center", color: "var(--text-secondary, #6b6b7b)" }}>
                 <div style={{ fontSize: 38, marginBottom: 10 }}>{currentSection.emptyIcon}</div>
                 <p style={{ margin: 0, fontSize: 14 }}>{currentSection.emptyMsg}</p>
               </div>
@@ -669,7 +718,7 @@ export default function ReceptionPage() {
                       {o.status === "ready" ? (
                         <button className="btn btn-sm btn-success" onClick={() => markServed(o.id)} style={{ width: "100%" }}>Mark as Served</button>
                       ) : (
-                        <div style={{ fontSize: 12, color: "var(--text-secondary)", width: "100%", textAlign: "center" }}>Managed from the kitchen screen</div>
+                        <div style={{ fontSize: 12, color: "var(--text-secondary, #6b6b7b)", width: "100%", textAlign: "center" }}>Managed from the kitchen screen</div>
                       )}
                     </OrderCard>
                   ))}
@@ -696,7 +745,7 @@ export default function ReceptionPage() {
                           <span>₹{it.price * it.qty}</span>
                         </div>
                       ))}
-                      <div style={{ borderTop: "1px dashed var(--border)", marginTop: 10, paddingTop: 10 }}>
+                      <div style={{ borderTop: "1px dashed var(--border, #e6e1d6)", marginTop: 10, paddingTop: 10 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 16 }}>
                           <span>Total</span><span>₹{o.billTotal}</span>
                         </div>
@@ -748,7 +797,7 @@ export default function ReceptionPage() {
               <label style={labelStyle}>Photo</label>
               <input ref={editFileInputRef} type="file" accept="image/*" onChange={(e) => handleImageUpload(e.target.files[0], true)} style={{ display: "none" }} />
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <button onClick={() => editFileInputRef.current?.click()} disabled={editUploading} className="btn btn-sm btn-ghost" style={{ border: "2px dashed var(--border)" }}>
+                <button onClick={() => editFileInputRef.current?.click()} disabled={editUploading} className="btn btn-sm btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>
                   {editUploading ? "⏳..." : "📷 Change"}
                 </button>
                 {editForm.imageUrl && !editUploading && <img src={editForm.imageUrl} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover" }} />}
@@ -775,7 +824,7 @@ export default function ReceptionPage() {
 
     return (
       <div className="card" style={{ borderRadius: 16, overflow: "hidden", opacity: item.available ? 1 : 0.6, display: "flex", flexDirection: "column" }}>
-        <div style={{ position: "relative", height: 140, background: "var(--surface-2)" }}>
+        <div style={{ position: "relative", height: 140, background: "var(--surface-2, #f3efe6)" }}>
           {item.imageUrl ? (
             <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           ) : (
@@ -796,15 +845,15 @@ export default function ReceptionPage() {
             <div style={{ fontWeight: 700, fontSize: 15 }}>{item.name}</div>
             <div style={{ fontWeight: 800, fontSize: 15, color: "#e8a33d", whiteSpace: "nowrap" }}>₹{item.price}</div>
           </div>
-          {item.description && <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginTop: 4, flex: 1 }}>{item.description}</div>}
+          {item.description && <div style={{ fontSize: 12.5, color: "var(--text-secondary, #6b6b7b)", marginTop: 4, flex: 1 }}>{item.description}</div>}
           <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
-            <button onClick={() => toggleAvailable(item)} className="btn btn-sm" style={{ background: item.available ? "var(--success-light)" : "var(--warning-light)", color: item.available ? "#166534" : "#92400e", border: "none", flex: 1, minWidth: 90 }}>
+            <button onClick={() => toggleAvailable(item)} className="btn btn-sm" style={{ background: item.available ? "var(--success-light, #dcfce7)" : "var(--warning-light, #fef3c7)", color: item.available ? "#166534" : "#92400e", border: "none", flex: 1, minWidth: 90 }}>
               {item.available ? "In Stock" : "Out"}
             </button>
-            <button onClick={() => toggleFeatured(item)} className="btn btn-sm" style={{ background: item.featured ? "#e8a33d20" : "var(--surface-2)", color: item.featured ? "#92400e" : "var(--text-secondary)", border: "none" }} title="Toggle featured">★</button>
-            <button onClick={() => toggleChefSpecial(item)} className="btn btn-sm" style={{ background: item.chefSpecial ? "#1a1a2e" : "var(--surface-2)", color: item.chefSpecial ? "#fff" : "var(--text-secondary)", border: "none" }} title="Toggle chef's special">👨‍🍳</button>
+            <button onClick={() => toggleFeatured(item)} className="btn btn-sm" style={{ background: item.featured ? "#e8a33d20" : "var(--surface-2, #f3efe6)", color: item.featured ? "#92400e" : "var(--text-secondary, #6b6b7b)", border: "none" }} title="Toggle featured">★</button>
+            <button onClick={() => toggleChefSpecial(item)} className="btn btn-sm" style={{ background: item.chefSpecial ? "#1a1a2e" : "var(--surface-2, #f3efe6)", color: item.chefSpecial ? "#fff" : "var(--text-secondary, #6b6b7b)", border: "none" }} title="Toggle chef's special">👨‍🍳</button>
             <button onClick={() => startEdit(item)} className="btn btn-sm btn-ghost">Edit</button>
-            <button onClick={() => deleteItem(item.id)} className="btn btn-sm btn-ghost" style={{ color: "var(--danger)" }}>Delete</button>
+            <button onClick={() => deleteItem(item.id)} className="btn btn-sm btn-ghost" style={{ color: "var(--danger, #dc2626)" }}>Delete</button>
           </div>
         </div>
       </div>
@@ -821,7 +870,7 @@ export default function ReceptionPage() {
       </div>
 
       {showAddCategory && (
-        <div className="card" style={{ padding: 20, borderRadius: 16, marginBottom: 20, border: "2px dashed var(--border)" }}>
+        <div className="card" style={{ padding: 20, borderRadius: 16, marginBottom: 20, border: "2px dashed var(--border, #e6e1d6)" }}>
           <h3 style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 14 }}>New Category</h3>
           <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 180 }}>
@@ -832,7 +881,7 @@ export default function ReceptionPage() {
               <label style={labelStyle}>Icon Photo</label>
               <input ref={categoryFileInputRef} type="file" accept="image/*" onChange={(e) => handleCategoryImageUpload(e.target.files[0])} style={{ display: "none" }} />
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <button onClick={() => categoryFileInputRef.current?.click()} disabled={categoryUploading} className="btn btn-ghost" style={{ border: "2px dashed var(--border)" }}>
+                <button onClick={() => categoryFileInputRef.current?.click()} disabled={categoryUploading} className="btn btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>
                   {categoryUploading ? "⏳..." : "📷 Upload"}
                 </button>
                 {newCategory.imageUrl && !categoryUploading && <img src={newCategory.imageUrl} alt="" style={{ width: 42, height: 42, borderRadius: "50%", objectFit: "cover" }} />}
@@ -866,7 +915,7 @@ export default function ReceptionPage() {
         <label style={labelStyle}>Food Photo</label>
         <input ref={fileInputRef} type="file" accept="image/*" onChange={(e) => handleImageUpload(e.target.files[0], false)} style={{ display: "none" }} />
         <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
-          <button onClick={() => fileInputRef.current?.click()} disabled={uploadingImage} className="btn btn-ghost" style={{ border: "2px dashed var(--border)" }}>
+          <button onClick={() => fileInputRef.current?.click()} disabled={uploadingImage} className="btn btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>
             {uploadingImage ? "⏳ Uploading..." : "📷 Choose Photo"}
           </button>
           {newItem.imageUrl && !uploadingImage && <img src={newItem.imageUrl} alt="Preview" style={{ width: 52, height: 52, borderRadius: 10, objectFit: "cover" }} />}
@@ -901,34 +950,71 @@ export default function ReceptionPage() {
             display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 68, background: "none", border: "none", cursor: "pointer", flexShrink: 0,
           }}
         >
-          <div style={{ width: 52, height: 52, borderRadius: "50%", background: menuTab === "all" ? "#1a1a2e" : "var(--surface-2)", color: menuTab === "all" ? "#fff" : "var(--text-secondary)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, border: menuTab === "all" ? "2px solid #1a1a2e" : "2px solid transparent" }}>
+          <div style={{ width: 52, height: 52, borderRadius: "50%", background: menuTab === "all" ? "#1a1a2e" : "var(--surface-2, #f3efe6)", color: menuTab === "all" ? "#fff" : "var(--text-secondary, #6b6b7b)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, border: menuTab === "all" ? "2px solid #1a1a2e" : "2px solid transparent" }}>
             🍴
           </div>
-          <span style={{ fontSize: 11.5, fontWeight: menuTab === "all" ? 800 : 600, color: menuTab === "all" ? "var(--text)" : "var(--text-secondary)" }}>All</span>
+          <span style={{ fontSize: 11.5, fontWeight: menuTab === "all" ? 800 : 600, color: menuTab === "all" ? "var(--text, #1a1a2e)" : "var(--text-secondary, #6b6b7b)" }}>All</span>
         </button>
         {categories.map((cat) => {
           const isActive = menuTab === cat.name;
           const count = menuItems.filter((m) => m.category === cat.name).length;
           return (
-            <div key={cat.id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 68, flexShrink: 0, position: "relative" }}>
-              <button onClick={() => setMenuTab(cat.name)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-                <div style={{ width: 52, height: 52, borderRadius: "50%", overflow: "hidden", background: isActive ? "#e8a33d" : "var(--surface-2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, border: isActive ? "2px solid #e8a33d" : "2px solid transparent" }}>
-                  {cat.imageUrl ? <img src={cat.imageUrl} alt={cat.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "🍽️"}
-                </div>
-              </button>
-              <span onClick={() => setMenuTab(cat.name)} style={{ fontSize: 11.5, fontWeight: isActive ? 800 : 600, color: isActive ? "var(--text)" : "var(--text-secondary)", cursor: "pointer", whiteSpace: "nowrap" }}>
+            <div key={cat.id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 68, flexShrink: 0, position: "relative", paddingTop: 4 }}>
+              <div style={{ position: "relative" }}>
+                <button onClick={() => setMenuTab(cat.name)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                  <div style={{ width: 52, height: 52, borderRadius: "50%", overflow: "hidden", background: isActive ? "#e8a33d" : "var(--surface-2, #f3efe6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, border: isActive ? "2px solid #e8a33d" : "2px solid var(--border, #e6e1d6)" }}>
+                    {cat.imageUrl ? <img src={cat.imageUrl} alt={cat.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "🍽️"}
+                  </div>
+                </button>
+                <button
+                  onClick={() => startEditCategory(cat)}
+                  title="Edit category"
+                  style={{ position: "absolute", top: -4, left: -4, width: 19, height: 19, borderRadius: "50%", background: "#1a1a2e", color: "#fff", border: "2px solid var(--surface, #fff)", fontSize: 9.5, cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}
+                >
+                  ✎
+                </button>
+                <button
+                  onClick={() => deleteCategory(cat)}
+                  title="Delete category"
+                  style={{ position: "absolute", top: -4, right: -4, width: 19, height: 19, borderRadius: "50%", background: "var(--danger, #dc2626)", color: "#fff", border: "2px solid var(--surface, #fff)", fontSize: 10, cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}
+                >
+                  ✕
+                </button>
+              </div>
+              <span onClick={() => setMenuTab(cat.name)} style={{ fontSize: 11.5, fontWeight: isActive ? 800 : 600, color: isActive ? "var(--text, #1a1a2e)" : "var(--text-secondary, #6b6b7b)", cursor: "pointer", whiteSpace: "nowrap" }}>
                 {cat.name}{count > 0 ? ` (${count})` : ""}
               </span>
-              {isActive && (
-                <button onClick={() => deleteCategory(cat)} title="Delete category" style={{ position: "absolute", top: -4, right: -2, width: 18, height: 18, borderRadius: "50%", background: "var(--danger)", color: "#fff", border: "none", fontSize: 10, cursor: "pointer", lineHeight: 1 }}>✕</button>
-              )}
             </div>
           );
         })}
       </div>
 
+      {editingCategoryId && (
+        <div className="card" style={{ padding: 20, marginBottom: 22, border: "2px dashed #e8a33d" }}>
+          <h3 style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 14 }}>Edit Category</h3>
+          <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <label style={labelStyle}>Category Name</label>
+              <input className="to-input" value={editCategoryForm.name} onChange={(e) => setEditCategoryForm((p) => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div>
+              <label style={labelStyle}>Icon Photo</label>
+              <input ref={editCategoryFileInputRef} type="file" accept="image/*" onChange={(e) => handleEditCategoryImageUpload(e.target.files[0])} style={{ display: "none" }} />
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <button onClick={() => editCategoryFileInputRef.current?.click()} disabled={editCategoryUploading} className="btn btn-ghost btn-sm">
+                  {editCategoryUploading ? "⏳..." : "📷 Change"}
+                </button>
+                {editCategoryForm.imageUrl && !editCategoryUploading && <img src={editCategoryForm.imageUrl} alt="" style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }} />}
+              </div>
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={saveEditCategory}>Save</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditingCategoryId(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {filteredCategoryItems.length === 0 ? (
-        <div className="card" style={{ padding: 48, textAlign: "center", color: "var(--text-secondary)", borderRadius: 16 }}>
+        <div className="card" style={{ padding: 48, textAlign: "center", color: "var(--text-secondary, #6b6b7b)", borderRadius: 16 }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>🔎</div>
           <p style={{ margin: 0 }}>{menuSearch ? "No dishes match your search." : "No items in this category yet."}</p>
         </div>
@@ -946,13 +1032,13 @@ export default function ReceptionPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h2 style={{ fontSize: 24, fontWeight: 800, margin: 0, fontFamily: "'Fraunces', serif" }}>Tables & QR Codes</h2>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "4px 0 0" }}>Print a code for each table — guests scan to open the menu.</p>
+          <p style={{ fontSize: 13, color: "var(--text-secondary, #6b6b7b)", margin: "4px 0 0" }}>Print a code for each table — guests scan to open the menu.</p>
         </div>
         <button className="btn btn-primary" onClick={addTable}>+ Add Table</button>
       </div>
 
       {tables.length === 0 ? (
-        <div className="card" style={{ padding: 48, textAlign: "center", color: "var(--text-secondary)", borderRadius: 16 }}>
+        <div className="card" style={{ padding: 48, textAlign: "center", color: "var(--text-secondary, #6b6b7b)", borderRadius: 16 }}>
           <div style={{ fontSize: 42, marginBottom: 12 }}>🪑</div>
           <p style={{ margin: 0 }}>No tables yet — add one to generate its QR code.</p>
         </div>
@@ -972,7 +1058,7 @@ export default function ReceptionPage() {
                 )}
                 <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
                   <button className="btn btn-sm btn-ghost" onClick={() => printQr(t.number)} style={{ flex: 1 }}>🖨 Print</button>
-                  <button className="btn btn-sm btn-ghost" onClick={() => deleteTable(t.id)} style={{ flex: 1, color: "var(--danger)" }}>Delete</button>
+                  <button className="btn btn-sm btn-ghost" onClick={() => deleteTable(t.id)} style={{ flex: 1, color: "var(--danger, #dc2626)" }}>Delete</button>
                 </div>
               </div>
             </div>
@@ -1001,7 +1087,7 @@ export default function ReceptionPage() {
           <div style={{ position: "absolute", inset: 0, backdropFilter: profileForm.logoUrl ? "blur(6px)" : "none" }} />
         </div>
         <div style={{ padding: "0 28px 28px", marginTop: -46, textAlign: "center" }}>
-          <div style={{ width: 92, height: 92, borderRadius: "50%", border: "4px solid var(--surface)", background: "var(--surface-2)", margin: "0 auto", overflow: "hidden", boxShadow: "0 4px 14px rgba(0,0,0,0.15)" }}>
+          <div style={{ width: 92, height: 92, borderRadius: "50%", border: "4px solid var(--surface, #ffffff)", background: "var(--surface-2, #f3efe6)", margin: "0 auto", overflow: "hidden", boxShadow: "0 4px 14px rgba(0,0,0,0.15)" }}>
             {profileForm.logoUrl ? (
               <img src={profileForm.logoUrl} alt="Logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             ) : (
@@ -1009,7 +1095,7 @@ export default function ReceptionPage() {
             )}
           </div>
           <h3 style={{ fontSize: 21, fontWeight: 800, marginTop: 14, marginBottom: 2, fontFamily: "'Fraunces', serif" }}>{profileForm.name || "Your Restaurant"}</h3>
-          <p style={{ fontSize: 13.5, color: "var(--text-secondary)", margin: 0 }}>{profileForm.tagline || "Add a tagline to introduce your place"}</p>
+          <p style={{ fontSize: 13.5, color: "var(--text-secondary, #6b6b7b)", margin: 0 }}>{profileForm.tagline || "Add a tagline to introduce your place"}</p>
 
           <div style={{ textAlign: "left", marginTop: 28, maxWidth: 420, marginLeft: "auto", marginRight: "auto" }}>
             <label style={labelStyle}>Restaurant Name</label>
@@ -1020,7 +1106,7 @@ export default function ReceptionPage() {
             <label style={labelStyle}>Logo</label>
             <input ref={logoFileInputRef} type="file" accept="image/*" onChange={(e) => handleLogoUpload(e.target.files[0])} style={{ display: "none" }} />
             <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
-              <button onClick={() => logoFileInputRef.current?.click()} disabled={logoUploading} className="btn btn-ghost" style={{ border: "2px dashed var(--border)" }}>
+              <button onClick={() => logoFileInputRef.current?.click()} disabled={logoUploading} className="btn btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>
                 {logoUploading ? "⏳ Uploading..." : "📷 Upload Logo"}
               </button>
             </div>
@@ -1089,6 +1175,62 @@ export default function ReceptionPage() {
         @keyframes splashLetters { from { opacity: 0; letter-spacing: 6px; } to { opacity: 1; letter-spacing: 0.5px; } }
         @keyframes splashLine { from { width: 0; } to { width: 46px; } }
         @keyframes splashFade { from { opacity: 0; } to { opacity: 1; } }
+
+        .card {
+          background: var(--surface, #ffffff) !important;
+          border: 1px solid var(--border, #e6e1d6) !important;
+          box-shadow: 0 1px 3px rgba(20,20,30,0.05), 0 1px 2px rgba(20,20,30,0.03) !important;
+          border-radius: 14px;
+        }
+        .btn {
+          font-family: inherit !important;
+          font-weight: 700 !important;
+          border-radius: 10px !important;
+          cursor: pointer !important;
+          border: none !important;
+          padding: 11px 20px !important;
+          font-size: 14px !important;
+          display: inline-flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+          gap: 6px !important;
+          transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease !important;
+          line-height: 1.2 !important;
+        }
+        .btn:hover { transform: translateY(-1px); filter: brightness(1.04); }
+        .btn:active { transform: translateY(0); filter: brightness(0.98); }
+        .btn-sm { padding: 8px 14px !important; font-size: 13px !important; border-radius: 8px !important; }
+        .btn-primary { background: #e8a33d !important; color: #ffffff !important; box-shadow: 0 2px 6px rgba(232,163,61,0.35) !important; }
+        .btn-danger { background: #fef2f2 !important; color: #dc2626 !important; }
+        .btn-success { background: #16a34a !important; color: #ffffff !important; box-shadow: 0 2px 6px rgba(22,163,74,0.3) !important; }
+        .btn-ghost { background: var(--surface-2, #f3efe6) !important; color: var(--text-secondary, #6b6b7b) !important; border: 1px solid var(--border, #e6e1d6) !important; }
+        .badge {
+          display: inline-flex !important;
+          align-items: center !important;
+          padding: 3px 10px !important;
+          border-radius: 100px !important;
+          font-size: 11.5px !important;
+          font-weight: 700 !important;
+          background: var(--surface-2, #f3efe6) !important;
+          color: var(--text-secondary, #6b6b7b) !important;
+        }
+        .badge-billed { background: #ede9fe !important; color: #6d28d9 !important; }
+        .to-input {
+          width: 100%;
+          box-sizing: border-box;
+          padding: 11px 14px;
+          border: 1px solid var(--border, #e6e1d6);
+          border-radius: 10px;
+          font-size: 14px;
+          background: var(--surface, #ffffff);
+          font-family: inherit;
+          color: var(--text, #1a1a2e);
+        }
+        .to-input:focus, select:focus, input:focus {
+          outline: none;
+          border-color: #e8a33d;
+          box-shadow: 0 0 0 3px rgba(232,163,61,0.15);
+        }
       `}</style>
 
       {showSplash && renderSplash()}
@@ -1100,7 +1242,7 @@ export default function ReceptionPage() {
       <aside
         className="no-print"
         style={{
-          width: 260,
+          width: isMobile ? 260 : (sidebarCollapsed ? 78 : 260),
           background: "#1a1a2e",
           color: "#fff",
           position: "fixed",
@@ -1108,29 +1250,51 @@ export default function ReceptionPage() {
           top: 0,
           bottom: 0,
           overflowY: "auto",
+          overflowX: "hidden",
           zIndex: 100,
           display: "flex",
           flexDirection: "column",
           transform: isMobile ? (sidebarOpen ? "translateX(0)" : "translateX(-100%)") : "translateX(0)",
-          transition: "transform 0.3s ease",
+          transition: "transform 0.3s ease, width 0.22s ease",
         }}
       >
-        <div style={{ padding: "24px 20px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-          <div style={{ fontSize: 20, fontWeight: 800, display: "flex", alignItems: "center", gap: 10, fontFamily: "'Fraunces', serif" }}>
-            <span style={{ fontSize: 24 }}>🍽️</span>
-            <span>Table Order</span>
+        <div style={{ padding: sidebarCollapsed && !isMobile ? "22px 14px" : "24px 20px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, overflow: "hidden" }}>
+            {profile?.logoUrl ? (
+              <img src={profile.logoUrl} alt="" style={{ width: 30, height: 30, borderRadius: 9, objectFit: "cover", flexShrink: 0 }} />
+            ) : (
+              <span style={{ fontSize: 24, flexShrink: 0 }}>🍽️</span>
+            )}
+            {(!sidebarCollapsed || isMobile) && (
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 17, fontWeight: 800, fontFamily: "'Fraunces', serif", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {profile?.name || "Your Restaurant"}
+                </div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>Reception Desk</div>
+              </div>
+            )}
           </div>
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 4 }}>Reception Desk</div>
+          {!isMobile && (
+            <button
+              onClick={() => setSidebarCollapsed((c) => !c)}
+              title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "rgba(255,255,255,0.7)", width: 26, height: 26, borderRadius: 8, cursor: "pointer", flexShrink: 0, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}
+            >
+              {sidebarCollapsed ? "»" : "«"}
+            </button>
+          )}
         </div>
         <nav style={{ padding: 12, display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
           {TABS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => { setActiveTab(tab.id); if (isMobile) setSidebarOpen(false); }}
+              title={tab.label}
               style={{
                 width: "100%",
                 textAlign: "left",
-                padding: "12px 16px",
+                padding: sidebarCollapsed && !isMobile ? "12px 0" : "12px 16px",
+                justifyContent: sidebarCollapsed && !isMobile ? "center" : "flex-start",
                 borderRadius: 10,
                 border: "none",
                 background: activeTab === tab.id ? "rgba(232,163,61,0.15)" : "transparent",
@@ -1142,24 +1306,31 @@ export default function ReceptionPage() {
                 alignItems: "center",
                 gap: 12,
                 transition: "all 0.15s ease",
+                position: "relative",
               }}
             >
               <span style={{ fontSize: 18 }}>{tab.icon}</span>
-              {tab.label}
+              {(!sidebarCollapsed || isMobile) && tab.label}
               {tab.id === "dashboard" && (pending.length + billRequested.length > 0) && (
-                <span style={{ marginLeft: "auto", background: "#dc2626", color: "#fff", fontSize: 10.5, fontWeight: 800, padding: "2px 7px", borderRadius: 100 }}>
+                <span style={{
+                  marginLeft: sidebarCollapsed && !isMobile ? 0 : "auto",
+                  position: sidebarCollapsed && !isMobile ? "absolute" : "static",
+                  top: sidebarCollapsed && !isMobile ? 6 : "auto",
+                  right: sidebarCollapsed && !isMobile ? 10 : "auto",
+                  background: "#dc2626", color: "#fff", fontSize: 10.5, fontWeight: 800, padding: "2px 7px", borderRadius: 100,
+                }}>
                   {pending.length + billRequested.length}
                 </span>
               )}
             </button>
           ))}
         </nav>
-        <div style={{ padding: 20, borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 12, color: "rgba(255,255,255,0.4)" }}>
-          {profile?.name || "Restaurant Name"}
+        <div style={{ padding: sidebarCollapsed && !isMobile ? "16px 0" : 20, borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 11.5, color: "rgba(255,255,255,0.4)", textAlign: sidebarCollapsed && !isMobile ? "center" : "left" }}>
+          {sidebarCollapsed && !isMobile ? "🍽️" : "Powered by Table Order"}
         </div>
       </aside>
 
-      <main style={{ marginLeft: isMobile ? 0 : 260, flex: 1, background: "var(--bg)", minHeight: "100vh", width: "100%" }}>
+      <main style={{ marginLeft: isMobile ? 0 : (sidebarCollapsed ? 78 : 260), flex: 1, background: "var(--bg, #faf8f2)", minHeight: "100vh", width: "100%", transition: "margin-left 0.22s ease" }}>
         {isMobile && (
           <div className="no-print" style={{ padding: "16px 20px", background: "#1a1a2e", color: "#fff", display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={() => setSidebarOpen(true)} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>
