@@ -19,12 +19,11 @@ import {
 // ---------------------------------------------------------------------------
 
 // How many items show in the horizontally-scrollable "Popular Picks" strip
-// before the rest get tucked behind "View All".
+// before the rest move to the "More to Explore" grid / the full "View All" page.
 const POPULAR_LIMIT = 8;
 
-// Emoji fallback per category. Add/rename freely to match your menu.
-// This covers a much wider spread of categories you'd see on a typical
-// mid-range Indian hotel/restaurant menu (not just the original 5).
+// Emoji fallback per category — only used when the receptionist hasn't
+// uploaded a photo for that category (see getCategoryIcon below).
 const CATEGORY_ICONS = {
   All: "🍽️",
   Starters: "🥗",
@@ -71,59 +70,132 @@ const CATEGORY_ICONS = {
   "Kids Menu": "🧒",
 };
 
-// Returns either { type: "emoji", value } or, if the restaurant has uploaded
-// a custom icon for that category (see notes below), { type: "image", src }.
-function getCategoryIcon(cat, customIcons) {
-  if (customIcons && customIcons[cat]) {
-    return { type: "image", src: customIcons[cat] };
+// Returns either { type: "emoji", value } or, if the receptionist has uploaded
+// a real photo for that category (stored on the `categories` collection —
+// same data the reception dashboard's "Menu" tab writes to), { type: "image", src }.
+// Photos always win over the emoji fallback.
+function getCategoryIcon(cat, categoryIconMap) {
+  if (categoryIconMap && categoryIconMap[cat]) {
+    return { type: "image", src: categoryIconMap[cat] };
   }
   return { type: "emoji", value: CATEGORY_ICONS[cat] || "🍴" };
 }
 
-// Rotating, non-repeating (until the cycle is exhausted) humour-ish quotes
-// for the rewards strip. Feel free to edit/add — order is shuffled per cycle.
-const REWARD_QUOTES = [
-  "Good food, good mood, good rewards.",
-  "Calories don't count when points are involved.",
-  "Behind every great meal is an even greater discount.",
-  "Order now, brag about it later.",
-  "Hungry today, rewarded tomorrow.",
-  "First rule of foodie club: always order dessert.",
-  "Chew slowly, earn quickly.",
-  "Warning: extreme deliciousness may cause repeat orders.",
-  "Every bite counts — literally, towards your rewards.",
-  "Eat well. Reward better.",
-  "Patience is a virtue, but so is ordering dessert first.",
-  "The best things in life are fried, and free with points.",
-  "A balanced diet is a starter in each hand.",
-  "Great appetite, greater rewards.",
-];
-
-// Shuffle-bag: pulls quotes without repeats until the whole list is used,
-// then reshuffles and starts a fresh cycle. Persists across page loads.
-function getNextRewardQuote() {
-  if (typeof window === "undefined") return REWARD_QUOTES[0];
+// ---------------------------------------------------------------------------
+// Tiny synthesized sound effects (no audio files needed).
+// Different actions get different, short, unobtrusive tones.
+// ---------------------------------------------------------------------------
+let _audioCtx = null;
+function getAudioCtx() {
+  if (typeof window === "undefined") return null;
   try {
-    const stored = window.localStorage.getItem("rewardQuoteBag");
-    let bag = stored ? JSON.parse(stored) : [];
-    if (!Array.isArray(bag) || bag.length === 0) {
-      bag = REWARD_QUOTES.map((_, i) => i);
-      for (let i = bag.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [bag[i], bag[j]] = [bag[j], bag[i]];
-      }
+    if (!_audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      _audioCtx = new Ctx();
     }
-    const nextIndex = bag.pop();
-    window.localStorage.setItem("rewardQuoteBag", JSON.stringify(bag));
-    return REWARD_QUOTES[nextIndex];
+    if (_audioCtx.state === "suspended") _audioCtx.resume();
+    return _audioCtx;
   } catch {
-    return REWARD_QUOTES[Math.floor(Math.random() * REWARD_QUOTES.length)];
+    return null;
   }
 }
 
-// Shared card used by both the Popular Picks strip and the full grid, so the
-// two layouts always stay visually identical.
+function playTone(freq = 600, duration = 100, type = "sine") {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.07, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration / 1000);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + duration / 1000);
+  } catch {
+    // sound is a nice-to-have, never let it break the app
+  }
+}
+
+function playChime() {
+  playTone(660, 130, "triangle");
+  setTimeout(() => playTone(880, 190, "triangle"), 120);
+  setTimeout(() => playTone(1040, 220, "triangle"), 260);
+}
+
+// ---------------------------------------------------------------------------
+// Global animation styles — mounted once at the top level (TablePage) so the
+// keyframes/classes stay available across every screen, including the splash.
+// ---------------------------------------------------------------------------
+const GLOBAL_ANIMATION_CSS = `
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes popIn { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+  @keyframes checkPop { 0% { transform: scale(0); } 60% { transform: scale(1.15); } 100% { transform: scale(1); } }
+  @keyframes toastSlideDown { from { opacity: 0; transform: translate(-50%, -18px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  @keyframes floatUp { 0% { opacity: 0; transform: translateY(0) scale(0.8); } 25% { opacity: 1; transform: translateY(-6px) scale(1); } 100% { opacity: 0; transform: translateY(-40px) scale(1); } }
+  @keyframes bump { 0% { transform: scale(1); } 35% { transform: scale(1.35) rotate(-8deg); } 60% { transform: scale(0.92) rotate(4deg); } 100% { transform: scale(1) rotate(0deg); } }
+  @keyframes splashPop { from { opacity: 0; transform: scale(0.88); } to { opacity: 1; transform: scale(1); } }
+  @keyframes splashGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(232,163,61,0.35); } 50% { box-shadow: 0 0 0 14px rgba(232,163,61,0); } }
+  @keyframes splashLetters { from { opacity: 0; letter-spacing: 6px; } to { opacity: 1; letter-spacing: 0.5px; } }
+  @keyframes splashLine { from { width: 0; } to { width: 46px; } }
+  @keyframes splashFade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes foodFloat {
+    0% { transform: translateY(0) rotate(0deg); opacity: 0; }
+    15% { opacity: 0.9; }
+    50% { transform: translateY(-18px) rotate(10deg); }
+    85% { opacity: 0.9; }
+    100% { transform: translateY(0) rotate(-8deg); opacity: 0; }
+  }
+
+  .tap-btn { transition: transform 0.12s ease, filter 0.12s ease; }
+  .tap-btn:active { transform: scale(0.94); filter: brightness(0.97); }
+
+  .cart-bump { display: inline-flex; animation: bump 0.4s ease; }
+
+  .menu-card-plus-float {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: #1a1a2e;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+    padding: 2px 9px;
+    border-radius: 100px;
+    animation: floatUp 0.7s ease forwards;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  .splash-food {
+    position: absolute;
+    font-size: 28px;
+    opacity: 0;
+    animation: foodFloat 3.4s ease-in-out infinite;
+  }
+`;
+
+// Shared card used by both the Popular Picks strip and every grid, so layouts
+// always stay visually identical. Tapping "+" gives a small floating "+1",
+// a soft pop sound, and (via the parent's cart-count effect) a cart bump.
 function MenuCard({ item, qty, onAdd, width }) {
+  const [pulses, setPulses] = useState([]);
+
+  function handleAdd() {
+    const id = `${Date.now()}-${Math.random()}`;
+    setPulses((p) => [...p, id]);
+    setTimeout(() => {
+      setPulses((p) => p.filter((x) => x !== id));
+    }, 700);
+    playTone(680, 90, "triangle");
+    onAdd();
+  }
+
   return (
     <div
       style={{
@@ -149,8 +221,12 @@ function MenuCard({ item, qty, onAdd, width }) {
             🍽️
           </div>
         )}
+        {pulses.map((id) => (
+          <span key={id} className="menu-card-plus-float">+1</span>
+        ))}
         <button
-          onClick={onAdd}
+          onClick={handleAdd}
+          className="tap-btn"
           style={{
             position: "absolute",
             bottom: -16,
@@ -201,6 +277,85 @@ function MenuCard({ item, qty, onAdd, width }) {
   );
 }
 
+// Full-screen "order placed" / "added to order" celebration.
+function SuccessOverlay({ message }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 200,
+        background: "rgba(26,26,46,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        animation: "fadeIn 0.25s ease",
+      }}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 24,
+          padding: "36px 32px",
+          textAlign: "center",
+          boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+          animation: "popIn 0.4s cubic-bezier(0.22,1,0.36,1)",
+          maxWidth: 280,
+        }}
+      >
+        <div
+          style={{
+            width: 64,
+            height: 64,
+            borderRadius: "50%",
+            background: "#e8a33d",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            margin: "0 auto 16px",
+            animation: "checkPop 0.5s ease 0.1s both",
+          }}
+        >
+          <span style={{ fontSize: 32, color: "#fff" }}>✓</span>
+        </div>
+        <div style={{ fontSize: 17, fontWeight: 800, color: "#1a1a2e" }}>{message}</div>
+      </div>
+    </div>
+  );
+}
+
+// Small toast for order-status changes (confirmed / preparing / ready / served),
+// each with its own emoji + tone so different stages feel distinct.
+function StatusToast({ emoji, msg }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 16,
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 200,
+        background: "#1a1a2e",
+        color: "#fff",
+        padding: "12px 20px",
+        borderRadius: 100,
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        fontSize: 14,
+        fontWeight: 700,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+        animation: "toastSlideDown 0.35s cubic-bezier(0.22,1,0.36,1)",
+        maxWidth: "90vw",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <span style={{ fontSize: 18 }}>{emoji}</span>
+      <span>{msg}</span>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 
 function TableContent() {
@@ -220,12 +375,28 @@ function TableContent() {
   const [lastOrderStatus, setLastOrderStatus] = useState(null);
   const [heroIndex, setHeroIndex] = useState(0);
   const [heroItems, setHeroItems] = useState([]);
-
-  // --- new state for this update ---
   const [searchQuery, setSearchQuery] = useState("");
-  const [showAllPopular, setShowAllPopular] = useState(false);
-  const [rewardQuote, setRewardQuote] = useState(REWARD_QUOTES[0]);
+
+  // Categories collection (same data the reception dashboard's "Menu" tab
+  // writes to — includes each category's uploaded photo, if any).
+  const [categoryDocs, setCategoryDocs] = useState([]);
+
+  // "menu" = normal browsing screen. "allMenu" = the dedicated "View All"
+  // page reached from Popular Picks, with its own back button.
+  const [screen, setScreen] = useState("menu");
+
+  // Celebration / feedback state
+  const [successOverlay, setSuccessOverlay] = useState(null);
+  const [statusToast, setStatusToast] = useState(null);
+  const [cartBump, setCartBump] = useState(false);
+
+  // Opening animation — shows every time the page loads or refreshes
+  const [showSplash, setShowSplash] = useState(true);
+  const [splashLeaving, setSplashLeaving] = useState(false);
+
   const heroScrollRef = useRef(null);
+  const prevCartCountRef = useRef(0);
+  const prevOrderStatusRef = useRef(null);
 
   // Tick timer
   useEffect(() => {
@@ -263,6 +434,16 @@ function TableContent() {
     return () => unsub();
   }, []);
 
+  // Categories — this is what the receptionist's "Menu" tab manages, photo
+  // uploads included. Powers the real category icons below.
+  useEffect(() => {
+    const q = query(collection(db, "categories"), orderBy("order", "asc"));
+    const unsub = onSnapshot(q, (snap) => {
+      setCategoryDocs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, []);
+
   // Order listener
   useEffect(() => {
     if (!tableNo) return;
@@ -281,7 +462,28 @@ function TableContent() {
     return () => unsub();
   }, [tableNo, lastOrderStatus]);
 
-  // Hero auto-slide (now drives an actual scrollable strip, not opacity fades)
+  // Celebrate order-status changes with a small toast + a distinct tone per stage
+  useEffect(() => {
+    if (order && prevOrderStatusRef.current && prevOrderStatusRef.current !== order.status) {
+      const configs = {
+        confirmed: { emoji: "✅", msg: "Order confirmed!", tone: 520 },
+        preparing: { emoji: "👨‍🍳", msg: "Your food is being cooked!", tone: 600 },
+        ready: { emoji: "🔔", msg: "Your order is ready!", tone: 720 },
+        served: { emoji: "🎉", msg: "Enjoy your meal!", tone: 840 },
+      };
+      const cfg = configs[order.status];
+      if (cfg) {
+        playTone(cfg.tone, 180, "triangle");
+        setStatusToast(cfg);
+        const t = setTimeout(() => setStatusToast(null), 2600);
+        prevOrderStatusRef.current = order.status;
+        return () => clearTimeout(t);
+      }
+    }
+    prevOrderStatusRef.current = order?.status || null;
+  }, [order?.status]);
+
+  // Hero auto-slide (drives an actual scrollable strip, not opacity fades)
   useEffect(() => {
     if (heroItems.length <= 1) return;
     const t = setInterval(() => {
@@ -295,10 +497,32 @@ function TableContent() {
     return () => clearInterval(t);
   }, [heroItems.length]);
 
-  // Pick a reward quote once per page load (won't repeat until the full list cycles)
+  // Bump the cart icon whenever an item is added
   useEffect(() => {
-    setRewardQuote(getNextRewardQuote());
+    const c = Object.values(cart).reduce((a, b) => a + b, 0);
+    if (c > prevCartCountRef.current) {
+      setCartBump(true);
+      const t = setTimeout(() => setCartBump(false), 400);
+      prevCartCountRef.current = c;
+      return () => clearTimeout(t);
+    }
+    prevCartCountRef.current = c;
+  }, [cart]);
+
+  // Opening animation — always plays for a couple of seconds, then fades
+  useEffect(() => {
+    const leaveTimer = setTimeout(() => setSplashLeaving(true), 1500);
+    const hideTimer = setTimeout(() => setShowSplash(false), 1950);
+    return () => {
+      clearTimeout(leaveTimer);
+      clearTimeout(hideTimer);
+    };
   }, []);
+
+  function dismissSplash() {
+    setSplashLeaving(true);
+    setTimeout(() => setShowSplash(false), 350);
+  }
 
   function handleHeroScroll(e) {
     const el = e.currentTarget;
@@ -314,7 +538,18 @@ function TableContent() {
   }
 
   const availableItems = menuItems.filter((m) => m.available);
-  const categories = ["All", ...new Set(availableItems.map((m) => m.category))];
+
+  // Tab order follows the receptionist's category order; any category found
+  // only on menu items (edge case) is appended after.
+  const categoryIconMap = {};
+  categoryDocs.forEach((c) => {
+    if (c.imageUrl) categoryIconMap[c.name] = c.imageUrl;
+  });
+  const itemCategoryNames = new Set(availableItems.map((m) => m.category));
+  const orderedCategoryNames = categoryDocs.map((c) => c.name).filter((n) => itemCategoryNames.has(n));
+  const looseCategoryNames = [...itemCategoryNames].filter((n) => !categoryDocs.some((c) => c.name === n));
+  const categories = ["All", ...orderedCategoryNames, ...looseCategoryNames];
+
   const filteredItems = activeCategory === "All" ? availableItems : availableItems.filter((m) => m.category === activeCategory);
 
   const isSearching = searchQuery.trim().length > 0;
@@ -335,6 +570,12 @@ function TableContent() {
     });
   }
 
+  function triggerSuccessOverlay(message) {
+    playChime();
+    setSuccessOverlay(message);
+    setTimeout(() => setSuccessOverlay(null), 1600);
+  }
+
   async function placeOrder() {
     const items = Object.entries(cart).map(([id, qty]) => {
       const item = findItem(id);
@@ -352,6 +593,8 @@ function TableContent() {
 
     setCart({});
     setShowCartSummary(false);
+    setScreen("menu");
+    triggerSuccessOverlay("Order placed!");
   }
 
   async function addMoreItems() {
@@ -377,6 +620,8 @@ function TableContent() {
     setCart({});
     setAddingMore(false);
     setShowCartSummary(false);
+    setScreen("menu");
+    triggerSuccessOverlay("Added to your order!");
   }
 
   async function requestBill() {
@@ -407,6 +652,186 @@ function TableContent() {
     ready: "Ready — on its way to your table",
     served: "Served. Enjoy!",
   };
+
+  // Shared bottom cart bar + cart modal, reused by both the "allMenu" page
+  // and the normal menu screen so the two stay perfectly in sync.
+  const bottomCartBar = (count > 0 || order) ? (
+    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
+      <button
+        onClick={() => {
+          playTone(560, 70, "sine");
+          if (order) setAddingMore(true);
+          else setShowCartSummary(true);
+        }}
+        className="tap-btn"
+        style={{
+          width: "100%",
+          maxWidth: 480,
+          margin: "0 auto",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 10,
+          padding: 14,
+          borderRadius: 50,
+          border: "none",
+          background: "#1a1a2e",
+          color: "#fff",
+          fontSize: 15,
+          fontWeight: 700,
+          cursor: "pointer",
+          boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
+        }}
+      >
+        <span style={{ position: "relative" }} className={cartBump ? "cart-bump" : ""}>
+          🛒
+          {count > 0 && (
+            <span style={{
+              position: "absolute",
+              top: -8,
+              right: -8,
+              background: "#e8a33d",
+              color: "#1a1a2e",
+              fontSize: 11,
+              fontWeight: 800,
+              padding: "1px 6px",
+              borderRadius: 100,
+            }}>
+              {count}
+            </span>
+          )}
+        </span>
+        {count > 0 ? `View Cart · ₹${total}` : "View Order Status"}
+      </button>
+    </div>
+  ) : null;
+
+  const cartSummaryModal = showCartSummary ? (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+      onClick={() => setShowCartSummary(false)}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: "24px 24px 0 0",
+          width: "100%",
+          maxWidth: 480,
+          maxHeight: "80vh",
+          overflow: "auto",
+          padding: 24,
+          animation: "slideUp 0.3s ease",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <h3 style={{ fontSize: 20, fontWeight: 800 }}>Your Cart</h3>
+          <button onClick={() => setShowCartSummary(false)} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: "#888" }}>×</button>
+        </div>
+
+        {Object.entries(cart).map(([id, qty]) => {
+          const item = findItem(id);
+          if (!item) return null;
+          return (
+            <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #f0f0f0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {item.imageUrl && (
+                  <img src={item.imageUrl} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: "cover" }} />
+                )}
+                <div>
+                  <div style={{ fontWeight: 600 }}>{item.name}</div>
+                  <div style={{ fontSize: 13, color: "#888" }}>₹{item.price} × {qty}</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <button onClick={() => { playTone(420, 60); changeQty(id, -1); }} className="tap-btn" style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid #ddd", background: "none", cursor: "pointer" }}>−</button>
+                <span style={{ fontWeight: 700, minWidth: 20, textAlign: "center" }}>{qty}</span>
+                <button onClick={() => { playTone(680, 70, "triangle"); changeQty(id, 1); }} className="tap-btn" style={{ width: 28, height: 28, borderRadius: "50%", border: "none", background: "#1a1a2e", color: "#fff", cursor: "pointer" }}>+</button>
+              </div>
+            </div>
+          );
+        })}
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20, paddingTop: 16, borderTop: "2px solid #1a1a2e", fontSize: 18, fontWeight: 800 }}>
+          <span>Total</span>
+          <span>₹{total}</span>
+        </div>
+
+        <button
+          onClick={addingMore ? addMoreItems : placeOrder}
+          className="tap-btn"
+          style={{
+            width: "100%",
+            marginTop: 20,
+            padding: 16,
+            borderRadius: 14,
+            border: "none",
+            background: "#e8a33d",
+            color: "#1a1a2e",
+            fontSize: 16,
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          {addingMore ? "Add to Order" : "Place Order"}
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  // ---------- Opening animation — plays every load / refresh ----------
+  if (showSplash) {
+    const foodEmojis = ["🍕", "🍔", "🍜", "🍰", "🥗", "🍣", "🍩", "🥤"];
+    return (
+      <div
+        onClick={dismissSplash}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 999,
+          cursor: "pointer",
+          background: "linear-gradient(135deg, #1a1a2e 0%, #241f3d 55%, #2d1b1b 100%)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          opacity: splashLeaving ? 0 : 1,
+          transition: "opacity 0.45s ease",
+          overflow: "hidden",
+        }}
+      >
+        {foodEmojis.map((e, i) => (
+          <span
+            key={i}
+            className="splash-food"
+            style={{
+              left: `${8 + i * 11}%`,
+              top: `${18 + (i % 3) * 24}%`,
+              animationDelay: `${i * 0.3}s`,
+            }}
+          >
+            {e}
+          </span>
+        ))}
+        <div style={{ animation: "splashPop 0.9s cubic-bezier(0.22, 1, 0.36, 1)", textAlign: "center", padding: 20, position: "relative", zIndex: 1 }}>
+          {profile?.logoUrl && (
+            <img
+              src={profile.logoUrl}
+              alt=""
+              style={{ width: 74, height: 74, borderRadius: "50%", objectFit: "cover", margin: "0 auto 20px", display: "block", border: "3px solid rgba(232,163,61,0.6)", animation: "splashGlow 2.2s ease-in-out infinite" }}
+            />
+          )}
+          <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 34, fontWeight: 700, color: "#fff", letterSpacing: 0.5, animation: "splashLetters 1s ease" }}>
+            {profile?.name || "Welcome"}
+          </div>
+          <div style={{ width: 46, height: 2, background: "#e8a33d", margin: "16px auto", animation: "splashLine 0.9s ease 0.3s both" }} />
+          <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.55)", letterSpacing: 1.5, textTransform: "uppercase", animation: "splashFade 1s ease 0.5s both" }}>
+            {profile?.tagline || "Scan, order, enjoy"}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ---------- Table picker ----------
   if (!tableNo) {
@@ -439,7 +864,8 @@ function TableContent() {
                 {tables.map((t) => (
                   <button
                     key={t.id}
-                    onClick={() => setTableNo(t.number)}
+                    onClick={() => { playTone(520, 80, "triangle"); setTableNo(t.number); }}
+                    className="tap-btn"
                     style={{
                       padding: "20px 8px",
                       fontSize: 22,
@@ -449,7 +875,6 @@ function TableContent() {
                       background: "#fff",
                       color: "#1a1a2e",
                       cursor: "pointer",
-                      transition: "all 0.15s ease",
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.borderColor = "#e8a33d";
@@ -550,6 +975,8 @@ function TableContent() {
 
     return (
       <div style={{ minHeight: "100vh", background: "#f8f6f3", padding: 24, fontFamily: "sans-serif", paddingBottom: 100 }}>
+        {statusToast && <StatusToast emoji={statusToast.emoji} msg={statusToast.msg} />}
+        {successOverlay && <SuccessOverlay message={successOverlay} />}
         <div style={{ maxWidth: 480, margin: "0 auto" }}>
           {/* Header */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
@@ -595,7 +1022,8 @@ function TableContent() {
           {/* Action Buttons */}
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <button
-              onClick={() => setAddingMore(true)}
+              onClick={() => { playTone(560, 70); setAddingMore(true); }}
+              className="tap-btn"
               style={{
                 width: "100%",
                 padding: 16,
@@ -617,7 +1045,8 @@ function TableContent() {
 
             {order.status === "served" && (
               <button
-                onClick={requestBill}
+                onClick={() => { playTone(700, 90, "triangle"); requestBill(); }}
+                className="tap-btn"
                 style={{
                   width: "100%",
                   padding: 16,
@@ -639,7 +1068,8 @@ function TableContent() {
         {/* Bottom Cart Button */}
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
           <button
-            onClick={() => setAddingMore(true)}
+            onClick={() => { playTone(560, 70); setAddingMore(true); }}
+            className="tap-btn"
             style={{
               width: "100%",
               maxWidth: 480,
@@ -667,6 +1097,47 @@ function TableContent() {
     );
   }
 
+  // ---------- Full Menu ("View All") screen ----------
+  if (screen === "allMenu") {
+    return (
+      <div style={{ minHeight: "100vh", background: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", paddingBottom: 100 }}>
+        {successOverlay && <SuccessOverlay message={successOverlay} />}
+
+        <div style={{ position: "sticky", top: 0, zIndex: 10, background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
+          <div style={{ maxWidth: 480, margin: "0 auto", padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+            <button
+              onClick={() => { playTone(440, 70); setScreen("menu"); }}
+              className="tap-btn"
+              style={{ width: 36, height: 36, borderRadius: "50%", border: "1px solid #eee", background: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#1a1a2e", flexShrink: 0 }}
+              aria-label="Back"
+            >
+              ←
+            </button>
+            <div style={{ fontWeight: 800, fontSize: 18, color: "#1a1a2e" }}>Full Menu</div>
+          </div>
+        </div>
+
+        <div style={{ maxWidth: 480, margin: "0 auto", padding: 20 }}>
+          {availableItems.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#888" }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>🍽️</div>
+              <p>No items on the menu yet.</p>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
+              {availableItems.map((it) => (
+                <MenuCard key={it.id} item={it} qty={cart[it.id] || 0} onAdd={() => changeQty(it.id, 1)} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {bottomCartBar}
+        {cartSummaryModal}
+      </div>
+    );
+  }
+
   // ---------- MENU — DAIRY QUEEN STYLE ----------
   return (
     <div style={{ minHeight: "100vh", background: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", paddingBottom: 100 }}>
@@ -678,53 +1149,39 @@ function TableContent() {
         }
       `}</style>
 
-      {/* Full-bleed Banner (logo left, table number right) */}
-      <div style={{ background: "linear-gradient(135deg, #fff5e0 0%, #fef3c7 100%)", position: "sticky", top: 0, zIndex: 10 }}>
-        <div style={{ maxWidth: 480, margin: "0 auto", padding: "16px 20px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              {profile?.logoUrl ? (
-                <img src={profile.logoUrl} alt="logo" style={{ width: 48, height: 48, borderRadius: 12, objectFit: "cover" }} />
-              ) : (
-                <div style={{ width: 48, height: 48, borderRadius: 12, background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", color: "#e8a33d", fontWeight: 800, fontSize: 18 }}>
-                  {profile?.name?.charAt(0) || "T"}
-                </div>
-              )}
-              <div style={{ fontWeight: 800, fontSize: 20, color: "#1a1a2e" }}>{profile?.name || "Menu"}</div>
-            </div>
+      {successOverlay && <SuccessOverlay message={successOverlay} />}
 
-            <div
-              style={{
-                background: "#1a1a2e",
-                color: "#fff",
-                padding: "8px 14px",
-                borderRadius: 100,
-                fontSize: 13,
-                fontWeight: 700,
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                whiteSpace: "nowrap",
-              }}
-            >
-              <span>📍</span> Table {tableNo}
+      {/* Full-bleed Banner — logo + stacked bold name / small table number,
+          with the search bar living in the same box */}
+      <div style={{ background: "linear-gradient(135deg, #fff5e0 0%, #fef3c7 100%)", position: "sticky", top: 0, zIndex: 10 }}>
+        <div style={{ maxWidth: 480, margin: "0 auto", padding: "16px 20px 18px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+            {profile?.logoUrl ? (
+              <img src={profile.logoUrl} alt="logo" style={{ width: 48, height: 48, borderRadius: 12, objectFit: "cover" }} />
+            ) : (
+              <div style={{ width: 48, height: 48, borderRadius: 12, background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", color: "#e8a33d", fontWeight: 800, fontSize: 18 }}>
+                {profile?.name?.charAt(0) || "T"}
+              </div>
+            )}
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 20, color: "#1a1a2e", lineHeight: 1.25 }}>{profile?.name || "Menu"}</div>
+              <div style={{ fontSize: 12, color: "#888", fontWeight: 600, marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>
+                <span>📍</span> Table {tableNo}
+              </div>
             </div>
           </div>
 
           {addingMore && (
             <button
-              onClick={() => { setAddingMore(false); setCart({}); }}
-              style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 13, fontWeight: 600, marginTop: 10, padding: 0 }}
+              onClick={() => { playTone(440, 70); setAddingMore(false); setCart({}); setScreen("menu"); }}
+              className="tap-btn"
+              style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 12, padding: 0 }}
             >
               ← Back to order status
             </button>
           )}
-        </div>
-      </div>
 
-      <div style={{ maxWidth: 480, margin: "0 auto" }}>
-        {/* Search bar (replaces the old "Deliver to" bar) */}
-        <div style={{ padding: "16px 20px 0" }}>
+          {/* Search bar now lives in the same box as the name / table number */}
           <div style={{ position: "relative" }}>
             <span style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", fontSize: 15, color: "#aaa" }}>🔍</span>
             <input
@@ -737,7 +1194,7 @@ function TableContent() {
                 padding: "12px 16px 12px 42px",
                 borderRadius: 14,
                 border: "none",
-                background: "#f8f6f3",
+                background: "#fff",
                 fontSize: 14,
                 outline: "none",
                 boxSizing: "border-box",
@@ -746,7 +1203,9 @@ function TableContent() {
             />
           </div>
         </div>
+      </div>
 
+      <div style={{ maxWidth: 480, margin: "0 auto" }}>
         {isSearching ? (
           // ---------- Search results ----------
           <div style={{ padding: "20px 20px 24px" }}>
@@ -816,9 +1275,11 @@ function TableContent() {
                           </div>
                           <button
                             onClick={() => {
+                              playTone(680, 90, "triangle");
                               changeQty(item.id, 1);
                               setShowCartSummary(true);
                             }}
+                            className="tap-btn"
                             style={{
                               padding: "8px 20px",
                               borderRadius: 50,
@@ -857,15 +1318,17 @@ function TableContent() {
               </div>
             )}
 
-            {/* Category Icons — expanded set, horizontally scrollable */}
+            {/* Category Icons — real photos from the reception dashboard,
+                falling back to an emoji only when no photo has been uploaded */}
             <div style={{ padding: "20px 20px 0" }}>
               <div className="hscroll" style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8, scrollbarWidth: "none" }}>
                 {categories.map((cat) => {
-                  const icon = getCategoryIcon(cat, profile?.categoryIcons);
+                  const icon = getCategoryIcon(cat, categoryIconMap);
                   return (
                     <button
                       key={cat}
-                      onClick={() => setActiveCategory(cat)}
+                      onClick={() => { playTone(500, 60); setActiveCategory(cat); }}
+                      className="tap-btn"
                       style={{
                         display: "flex",
                         flexDirection: "column",
@@ -879,13 +1342,12 @@ function TableContent() {
                         fontSize: 12,
                         fontWeight: 600,
                         cursor: "pointer",
-                        transition: "all 0.15s ease",
                         minWidth: 70,
                         flexShrink: 0,
                       }}
                     >
                       {icon.type === "image" ? (
-                        <img src={icon.src} alt={cat} style={{ width: 24, height: 24, objectFit: "contain" }} />
+                        <img src={icon.src} alt={cat} style={{ width: 24, height: 24, objectFit: "cover", borderRadius: 8 }} />
                       ) : (
                         <span style={{ fontSize: 24 }}>{icon.value}</span>
                       )}
@@ -896,7 +1358,7 @@ function TableContent() {
               </div>
             </div>
 
-            {/* Popular Picks (horizontal strip) / Category Grid */}
+            {/* Popular Picks — max 8, horizontally scrollable, then "View All" → dedicated Full Menu page */}
             <div style={{ padding: "24px 20px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e" }}>
@@ -905,15 +1367,17 @@ function TableContent() {
 
                 {activeCategory === "All" && availableItems.length > POPULAR_LIMIT && (
                   <button
-                    onClick={() => setShowAllPopular((v) => !v)}
+                    onClick={() => { playTone(440, 70); setScreen("allMenu"); }}
+                    className="tap-btn"
                     style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}
                   >
-                    {showAllPopular ? "← Show Less" : "View All →"}
+                    View All →
                   </button>
                 )}
                 {activeCategory !== "All" && (
                   <button
-                    onClick={() => setActiveCategory("All")}
+                    onClick={() => { playTone(440, 70); setActiveCategory("All"); }}
+                    className="tap-btn"
                     style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}
                   >
                     View All →
@@ -928,7 +1392,7 @@ function TableContent() {
                 </div>
               )}
 
-              {activeCategory === "All" && !showAllPopular ? (
+              {activeCategory === "All" ? (
                 <div className="hscroll" style={{ display: "flex", gap: 14, overflowX: "auto", paddingBottom: 8, scrollbarWidth: "none" }}>
                   {filteredItems.slice(0, POPULAR_LIMIT).map((it) => (
                     <MenuCard key={it.id} item={it} qty={cart[it.id] || 0} onAdd={() => changeQty(it.id, 1)} width={150} />
@@ -943,161 +1407,42 @@ function TableContent() {
               )}
             </div>
 
-            {/* Rewards strip — rotating quote instead of a fixed line */}
-            <div style={{ padding: "0 20px 24px" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  padding: "16px 18px",
-                  borderRadius: 18,
-                  background: "linear-gradient(135deg, #1a1a2e 0%, #2d2b52 100%)",
-                  color: "#fff",
-                }}
-              >
-                <div style={{ fontSize: 28 }}>🎁</div>
-                <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.4 }}>{rewardQuote}</div>
+            {/* More to Explore — the rest of the menu, right below Popular Picks
+                (replaces the old rewards/quote strip) */}
+            {activeCategory === "All" && filteredItems.length > POPULAR_LIMIT && (
+              <div style={{ padding: "0 20px 24px" }}>
+                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e", marginBottom: 16 }}>More to Explore</h2>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
+                  {filteredItems.slice(POPULAR_LIMIT).map((it) => (
+                    <MenuCard key={it.id} item={it} qty={cart[it.id] || 0} onAdd={() => changeQty(it.id, 1)} />
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </>
         )}
       </div>
 
-      {/* Fixed Bottom — Cart Button Only (left exactly as-is, per your note) */}
-      {(count > 0 || order) && (
-        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
-          <button
-            onClick={() => order ? setAddingMore(true) : setShowCartSummary(true)}
-            style={{
-              width: "100%",
-              maxWidth: 480,
-              margin: "0 auto",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 10,
-              padding: 14,
-              borderRadius: 50,
-              border: "none",
-              background: "#1a1a2e",
-              color: "#fff",
-              fontSize: 15,
-              fontWeight: 700,
-              cursor: "pointer",
-              boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
-            }}
-          >
-            <span style={{ position: "relative" }}>
-              🛒
-              {count > 0 && (
-                <span style={{
-                  position: "absolute",
-                  top: -8,
-                  right: -8,
-                  background: "#e8a33d",
-                  color: "#1a1a2e",
-                  fontSize: 11,
-                  fontWeight: 800,
-                  padding: "1px 6px",
-                  borderRadius: 100,
-                }}>
-                  {count}
-                </span>
-              )}
-            </span>
-            {count > 0 ? `View Cart · ₹${total}` : "View Order Status"}
-          </button>
-        </div>
-      )}
-
-      {/* Cart Summary Modal */}
-      {showCartSummary && (
-        <div
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
-          onClick={() => setShowCartSummary(false)}
-        >
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: "24px 24px 0 0",
-              width: "100%",
-              maxWidth: 480,
-              maxHeight: "80vh",
-              overflow: "auto",
-              padding: 24,
-              animation: "slideUp 0.3s ease",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-              <h3 style={{ fontSize: 20, fontWeight: 800 }}>Your Cart</h3>
-              <button onClick={() => setShowCartSummary(false)} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: "#888" }}>×</button>
-            </div>
-
-            {Object.entries(cart).map(([id, qty]) => {
-              const item = findItem(id);
-              if (!item) return null;
-              return (
-                <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #f0f0f0" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    {item.imageUrl && (
-                      <img src={item.imageUrl} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: "cover" }} />
-                    )}
-                    <div>
-                      <div style={{ fontWeight: 600 }}>{item.name}</div>
-                      <div style={{ fontSize: 13, color: "#888" }}>₹{item.price} × {qty}</div>
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <button onClick={() => changeQty(id, -1)} style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid #ddd", background: "none", cursor: "pointer" }}>−</button>
-                    <span style={{ fontWeight: 700, minWidth: 20, textAlign: "center" }}>{qty}</span>
-                    <button onClick={() => changeQty(id, 1)} style={{ width: 28, height: 28, borderRadius: "50%", border: "none", background: "#1a1a2e", color: "#fff", cursor: "pointer" }}>+</button>
-                  </div>
-                </div>
-              );
-            })}
-
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20, paddingTop: 16, borderTop: "2px solid #1a1a2e", fontSize: 18, fontWeight: 800 }}>
-              <span>Total</span>
-              <span>₹{total}</span>
-            </div>
-
-            <button
-              onClick={addingMore ? addMoreItems : placeOrder}
-              style={{
-                width: "100%",
-                marginTop: 20,
-                padding: 16,
-                borderRadius: 14,
-                border: "none",
-                background: "#e8a33d",
-                color: "#1a1a2e",
-                fontSize: 16,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              {addingMore ? "Add to Order" : "Place Order"}
-            </button>
-          </div>
-        </div>
-      )}
+      {bottomCartBar}
+      {cartSummaryModal}
     </div>
   );
 }
 
 export default function TablePage() {
   return (
-    <Suspense fallback={
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif", color: "#888" }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ width: 40, height: 40, border: "3px solid #eee", borderTopColor: "#e8a33d", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
-          Loading menu...
+    <>
+      <style>{GLOBAL_ANIMATION_CSS}</style>
+      <Suspense fallback={
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif", color: "#888" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ width: 40, height: 40, border: "3px solid #eee", borderTopColor: "#e8a33d", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
+            Loading menu...
+          </div>
         </div>
-      </div>
-    }>
-      <TableContent />
-    </Suspense>
+      }>
+        <TableContent />
+      </Suspense>
+    </>
   );
 }
