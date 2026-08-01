@@ -83,4 +83,4 @@ export default function TablePage() {
       <TableContent />
     </Suspense>
   );
-}
+} 
