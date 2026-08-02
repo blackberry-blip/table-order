@@ -1,15 +1,35 @@
 import { AuthProvider } from "@/lib/auth-context";
+import { PWAProvider } from "@/components/PWAProvider";
 
 export const metadata = {
   title: "Table Order",
   description: "QR-based restaurant ordering",
+  manifest: "/manifest.json",
+  themeColor: "#1a1a2e",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Table Order Staff",
+  },
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, padding: 0, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
-        <AuthProvider>{children}</AuthProvider>
+      <head>
+        <link rel="apple-touch-icon" href="/icon-192x192.png" />
+      </head>
+      <body
+        style={{
+          margin: 0,
+          padding: 0,
+          fontFamily:
+            "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        }}
+      >
+        <AuthProvider>
+          <PWAProvider>{children}</PWAProvider>
+        </AuthProvider>
       </body>
     </html>
   );
