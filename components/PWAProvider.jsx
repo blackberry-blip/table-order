@@ -11,26 +11,22 @@ export function PWAProvider({ children }) {
   const [isIOS, setIsIOS] = useState(false);
 
   useEffect(() => {
-    // Already running as installed PWA?
     if (window.matchMedia("(display-mode: standalone)").matches) {
       setIsInstalled(true);
       return;
     }
 
-    // Detect iOS Safari (no beforeinstallprompt support)
     const ua = window.navigator.userAgent;
     const isIOSDevice = /iPad|iPhone|iPod/.test(ua);
     const isSafari = /Safari/.test(ua) && !/Chrome/.test(ua);
     setIsIOS(isIOSDevice && isSafari);
 
-    // Only register SW on staff pages
     const isStaffPage =
       pathname &&
-      (pathname.startsWith("/reception") || pathname.startsWith("/kitchen"));
+      (pathname.startsWith("/receptionist") || pathname.startsWith("/kitchen"));
 
     if (!isStaffPage) return;
 
-    // Register service worker
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker
         .register("/sw.js")
@@ -38,7 +34,6 @@ export function PWAProvider({ children }) {
         .catch((err) => console.log("[PWA] SW failed:", err));
     }
 
-    // Capture Chrome/Edge install prompt
     const handleBeforeInstallPrompt = (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -73,20 +68,17 @@ export function PWAProvider({ children }) {
     }
   };
 
-  // Don't show banner if already installed
   if (isInstalled) return children;
 
-  // Don't show anything on customer table page
   const isStaffPage =
     pathname &&
-    (pathname.startsWith("/reception") || pathname.startsWith("/kitchen"));
+    (pathname.startsWith("/receptionist") || pathname.startsWith("/kitchen"));
   if (!isStaffPage) return children;
 
   return (
     <>
       {children}
 
-      {/* Install Banner */}
       {showBanner && (
         <div
           style={{

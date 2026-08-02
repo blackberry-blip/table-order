@@ -1,7 +1,7 @@
 const CACHE_NAME = "table-order-staff-v1";
 const STATIC_ASSETS = [
   "/",
-  "/reception",
+  "/receptionist",
   "/kitchen",
   "/icon-192x192.png",
   "/icon-512x512.png",
@@ -39,7 +39,6 @@ self.addEventListener("fetch", (event) => {
 
       return fetch(request)
         .then((networkResponse) => {
-          // Don't cache API/Firebase calls
           if (
             request.url.includes("/api/") ||
             request.url.includes("firebase") ||
@@ -55,9 +54,8 @@ self.addEventListener("fetch", (event) => {
           return networkResponse;
         })
         .catch(() => {
-          // Fallback for offline navigation
           if (request.mode === "navigate") {
-            return caches.match("/reception");
+            return caches.match("/receptionist");
           }
         });
     })

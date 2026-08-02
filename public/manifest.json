@@ -2,7 +2,7 @@
   "name": "Table Order - Staff",
   "short_name": "TableOrder",
   "description": "Restaurant staff dashboard for reception and kitchen",
-  "start_url": "/reception",
+  "start_url": "/receptionist",
   "display": "standalone",
   "background_color": "#1a1a2e",
   "theme_color": "#1a1a2e",
