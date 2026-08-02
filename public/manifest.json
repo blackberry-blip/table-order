@@ -1,0 +1,23 @@
+{
+  "name": "Table Order - Staff",
+  "short_name": "TableOrder Staff",
+  "description": "Restaurant staff dashboard for orders, menu, and tables",
+  "start_url": "/reception",
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#1a1a2e",
+  "orientation": "portrait",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
