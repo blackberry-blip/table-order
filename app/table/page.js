@@ -20,6 +20,15 @@ import {
 // ---------------------------------------------------------------------------
 const POPULAR_LIMIT = 8;
 
+// Bold, condensed display font used for the restaurant name, splash title,
+// and section headlines — inspired by the chunky all-caps headline style on
+// cravburgers.shop. I can't read their actual @font-face off the page (fetch
+// only gives me rendered text, not CSS), so this is "Anton" from Google
+// Fonts as a close stand-in. If you check their page source / devtools and
+// find the real font name, just swap the string below — every place that
+// wants the "site" look pulls from this one constant.
+const DISPLAY_FONT = "'Anton', sans-serif";
+
 const CATEGORY_ICONS = {
   All: "🍽️", Starters: "🥗", Soups: "🍲", Soup: "🍲", Salads: "🥙", Salad: "🥙",
   Mains: "🍛", "Main Course": "🍛", "North Indian": "🍛", "South Indian": "🥞",
@@ -85,6 +94,8 @@ function playChime() {
 // Global CSS
 // ---------------------------------------------------------------------------
 const GLOBAL_ANIMATION_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800&display=swap');
+
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
@@ -98,13 +109,12 @@ const GLOBAL_ANIMATION_CSS = `
   @keyframes splashLetters { from { opacity: 0; letter-spacing: 6px; } to { opacity: 1; letter-spacing: 0.5px; } }
   @keyframes splashLine { from { width: 0; } to { width: 46px; } }
   @keyframes splashFade { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes foodFloat {
-    0% { transform: translateY(0) rotate(0deg); opacity: 0; }
-    15% { opacity: 0.9; }
-    50% { transform: translateY(-18px) rotate(10deg); }
-    85% { opacity: 0.9; }
-    100% { transform: translateY(0) rotate(-8deg); opacity: 0; }
+  @keyframes layerDrop {
+    0% { opacity: 0; transform: translateY(-50px) rotate(-8deg); }
+    60% { opacity: 1; transform: translateY(6px) rotate(3deg); }
+    100% { opacity: 1; transform: translateY(0) rotate(0deg); }
   }
+
   .tap-btn { transition: transform 0.12s ease, filter 0.12s ease; }
   .tap-btn:active { transform: scale(0.94); filter: brightness(0.97); }
   .cart-bump { display: inline-flex; animation: bump 0.4s ease; }
@@ -113,7 +123,6 @@ const GLOBAL_ANIMATION_CSS = `
     font-size: 12px; font-weight: 800; padding: 2px 9px; border-radius: 100px;
     animation: floatUp 0.7s ease forwards; pointer-events: none; z-index: 3;
   }
-  .splash-food { position: absolute; font-size: 28px; opacity: 0; animation: foodFloat 3.4s ease-in-out infinite; }
 `;
 
 // ---------------------------------------------------------------------------
@@ -194,6 +203,9 @@ function TableContent() {
   const [heroIndex, setHeroIndex] = useState(0);
   const [heroItems, setHeroItems] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
+  // Search is now collapsed behind an icon next to the logo to save header
+  // space — the input only mounts once the icon is tapped.
+  const [searchOpen, setSearchOpen] = useState(false);
   const [categoryDocs, setCategoryDocs] = useState([]);
   const [screen, setScreen] = useState("menu");
   const [successOverlay, setSuccessOverlay] = useState(null);
@@ -324,10 +336,11 @@ function TableContent() {
     prevCartCountRef.current = c;
   }, [cart]);
 
-  // Splash
+  // Splash — the burger-layers-stacking sequence takes ~1.4s to finish, so
+  // give it a bit more runway before fading than a plain logo fade would need.
   useEffect(() => {
-    const leaveTimer = setTimeout(() => setSplashLeaving(true), 1500);
-    const hideTimer = setTimeout(() => setShowSplash(false), 1950);
+    const leaveTimer = setTimeout(() => setSplashLeaving(true), 2200);
+    const hideTimer = setTimeout(() => setShowSplash(false), 2650);
     return () => {
       clearTimeout(leaveTimer);
       clearTimeout(hideTimer);
@@ -337,6 +350,15 @@ function TableContent() {
   function dismissSplash() {
     setSplashLeaving(true);
     setTimeout(() => setShowSplash(false), 350);
+  }
+
+  function toggleSearch() {
+    playTone(500, 60);
+    setSearchOpen((prev) => {
+      const next = !prev;
+      if (!next) setSearchQuery("");
+      return next;
+    });
   }
 
   function handleHeroScroll(e) {
@@ -552,9 +574,9 @@ function TableContent() {
     );
   }
 
-  // ---------- Splash ----------
+  // ---------- Splash — burger ingredient layers stacking into place ----------
   if (showSplash) {
-    const foodEmojis = ["🍕", "🍔", "🍜", "🍰", "🥗", "🍣", "🍩", "🥤"];
+    const layers = ["🍞", "🥬", "🍅", "🧀", "🥩", "🍞"]; // top bun → lettuce → tomato → cheese → patty → bottom bun
     return (
       <div
         onClick={dismissSplash}
@@ -565,18 +587,34 @@ function TableContent() {
           opacity: splashLeaving ? 0 : 1, transition: "opacity 0.45s ease", overflow: "hidden",
         }}
       >
-        {foodEmojis.map((e, i) => (
-          <span key={i} className="splash-food" style={{ left: `${8 + i * 11}%`, top: `${18 + (i % 3) * 24}%`, animationDelay: `${i * 0.3}s` }}>{e}</span>
-        ))}
-        <div style={{ animation: "splashPop 0.9s cubic-bezier(0.22, 1, 0.36, 1)", textAlign: "center", padding: 20, position: "relative", zIndex: 1 }}>
+        <div style={{ fontSize: 11, letterSpacing: 3, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", marginBottom: 18, fontWeight: 700, animation: "splashFade 0.6s ease" }}>
+          Preparing the kitchen...
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+          {layers.map((l, i) => (
+            <span
+              key={i}
+              style={{ fontSize: 38, lineHeight: 1, marginTop: i === 0 ? 0 : -10, animation: `layerDrop 0.5s ease ${i * 0.18}s both`, filter: "drop-shadow(0 3px 4px rgba(0,0,0,0.35))" }}
+            >
+              {l}
+            </span>
+          ))}
+        </div>
+
+        <div style={{ textAlign: "center", padding: 20, position: "relative", zIndex: 1, marginTop: 6 }}>
           {profile?.logoUrl && (
-            <img src={profile.logoUrl} alt="" style={{ width: 74, height: 74, borderRadius: "50%", objectFit: "cover", margin: "0 auto 20px", display: "block", border: "3px solid rgba(232,163,61,0.6)", animation: "splashGlow 2.2s ease-in-out infinite" }} />
+            <img
+              src={profile.logoUrl}
+              alt=""
+              style={{ width: 64, height: 64, borderRadius: "50%", objectFit: "cover", margin: "0 auto 16px", display: "block", border: "3px solid rgba(232,163,61,0.6)", animation: `splashGlow 2.2s ease-in-out infinite ${layers.length * 0.18}s` }}
+            />
           )}
-          <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 34, fontWeight: 700, color: "#fff", letterSpacing: 0.5, animation: "splashLetters 1s ease" }}>
+          <div style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 36, color: "#fff", letterSpacing: 0.5, textTransform: "uppercase", animation: `splashLetters 1s ease ${layers.length * 0.18 + 0.15}s both` }}>
             {profile?.name || "Welcome"}
           </div>
-          <div style={{ width: 46, height: 2, background: "#e8a33d", margin: "16px auto", animation: "splashLine 0.9s ease 0.3s both" }} />
-          <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.55)", letterSpacing: 1.5, textTransform: "uppercase", animation: "splashFade 1s ease 0.5s both" }}>
+          <div style={{ width: 46, height: 2, background: "#e8a33d", margin: "16px auto", animation: `splashLine 0.9s ease ${layers.length * 0.18 + 0.35}s both` }} />
+          <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.55)", letterSpacing: 1.5, textTransform: "uppercase", animation: `splashFade 1s ease ${layers.length * 0.18 + 0.5}s both` }}>
             {profile?.tagline || "Scan, order, enjoy"}
           </div>
         </div>
@@ -593,7 +631,7 @@ function TableContent() {
             {profile?.logoUrl && (
               <img src={profile.logoUrl} alt="logo" style={{ width: 80, height: 80, borderRadius: "50%", objectFit: "cover", marginBottom: 16 }} />
             )}
-            <h1 style={{ fontSize: 26, fontWeight: 800, color: "#1a1a2e" }}>{profile?.name || "Welcome"}</h1>
+            <h1 style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 30, color: "#1a1a2e", textTransform: "uppercase", letterSpacing: 0.4 }}>{profile?.name || "Welcome"}</h1>
             {profile?.tagline && <p style={{ color: "#888", marginTop: 4, fontSize: 14 }}>{profile.tagline}</p>}
           </div>
           <div style={{ background: "#fff", borderRadius: 20, padding: 24, boxShadow: "0 4px 20px rgba(0,0,0,0.08)", marginBottom: 20 }}>
@@ -813,7 +851,7 @@ function TableContent() {
               style={{ width: 36, height: 36, borderRadius: "50%", border: "1px solid #eee", background: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#1a1a2e", flexShrink: 0 }}
               aria-label="Back"
             >←</button>
-            <div style={{ fontWeight: 800, fontSize: 18, color: "#1a1a2e" }}>Full Menu</div>
+            <div style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 20, color: "#1a1a2e", textTransform: "uppercase", letterSpacing: 0.3 }}>Full Menu</div>
           </div>
         </div>
         <div style={{ maxWidth: 480, margin: "0 auto", padding: 20 }}>
@@ -844,42 +882,75 @@ function TableContent() {
       `}</style>
       {successOverlay && <SuccessOverlay message={successOverlay} />}
 
+      {/* Header — logo, big bold name + table number, search collapsed to an icon */}
       <div style={{ background: "linear-gradient(135deg, #fff5e0 0%, #fef3c7 100%)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ maxWidth: 480, margin: "0 auto", padding: "16px 20px 18px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {profile?.logoUrl ? (
-              <img src={profile.logoUrl} alt="logo" style={{ width: 48, height: 48, borderRadius: 12, objectFit: "cover" }} />
+              <img src={profile.logoUrl} alt="logo" style={{ width: 48, height: 48, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} />
             ) : (
-              <div style={{ width: 48, height: 48, borderRadius: 12, background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", color: "#e8a33d", fontWeight: 800, fontSize: 18 }}>
+              <div style={{ width: 48, height: 48, borderRadius: 12, background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", color: "#e8a33d", fontWeight: 800, fontSize: 18, flexShrink: 0 }}>
                 {profile?.name?.charAt(0) || "T"}
               </div>
             )}
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 20, color: "#1a1a2e", lineHeight: 1.25 }}>{profile?.name || "Menu"}</div>
-              <div style={{ fontSize: 12, color: "#888", fontWeight: 600, marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontFamily: DISPLAY_FONT,
+                  fontWeight: 400,
+                  fontSize: 26,
+                  color: "#1a1a2e",
+                  lineHeight: 1.05,
+                  letterSpacing: 0.3,
+                  textTransform: "uppercase",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {profile?.name || "Menu"}
+              </div>
+              <div style={{ fontSize: 12, color: "#888", fontWeight: 600, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
                 <span>📍</span> Table {tableNo}
               </div>
             </div>
+            <button
+              onClick={toggleSearch}
+              className="tap-btn"
+              aria-label="Search"
+              style={{
+                width: 40, height: 40, borderRadius: "50%", border: "none", flexShrink: 0,
+                background: searchOpen ? "#1a1a2e" : "rgba(255,255,255,0.65)",
+                color: searchOpen ? "#fff" : "#1a1a2e",
+                fontSize: 16, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}
+            >
+              🔍
+            </button>
           </div>
 
           {addingMore && (
             <button
               onClick={() => { playTone(440, 70); setAddingMore(false); setCart({}); setScreen("menu"); }}
               className="tap-btn"
-              style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 12, padding: 0 }}
+              style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 13, fontWeight: 600, marginTop: 12, padding: 0 }}
             >← Back to order status</button>
           )}
 
-          <div style={{ position: "relative" }}>
-            <span style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", fontSize: 15, color: "#aaa" }}>🔍</span>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search for dishes..."
-              style={{ width: "100%", padding: "12px 16px 12px 42px", borderRadius: 14, border: "none", background: "#fff", fontSize: 14, outline: "none", boxSizing: "border-box", color: "#1a1a2e" }}
-            />
-          </div>
+          {searchOpen && (
+            <div style={{ position: "relative", marginTop: 14, animation: "slideUp 0.25s ease" }}>
+              <span style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", fontSize: 15, color: "#aaa" }}>🔍</span>
+              <input
+                autoFocus
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search for dishes..."
+                style={{ width: "100%", padding: "12px 16px 12px 42px", borderRadius: 14, border: "none", background: "#fff", fontSize: 14, outline: "none", boxSizing: "border-box", color: "#1a1a2e" }}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -937,23 +1008,50 @@ function TableContent() {
               </div>
             )}
 
+            {/* Category tiles — receptionist's uploaded photo now fills the
+                entire tile, with the category name overlaid on top of it
+                (falls back to a centered emoji on a plain tile if no photo
+                was uploaded for that category). */}
             <div style={{ padding: "20px 20px 0" }}>
               <div className="hscroll" style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8, scrollbarWidth: "none" }}>
                 {categories.map((cat) => {
                   const icon = getCategoryIcon(cat, categoryIconMap);
+                  const isActive = activeCategory === cat;
                   return (
                     <button
                       key={cat}
                       onClick={() => { playTone(500, 60); setActiveCategory(cat); }}
                       className="tap-btn"
-                      style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "10px 14px", borderRadius: 16, border: "none", background: activeCategory === cat ? "#1a1a2e" : "#f8f6f3", color: activeCategory === cat ? "#fff" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", minWidth: 70, flexShrink: 0 }}
+                      style={{
+                        position: "relative",
+                        width: 88,
+                        height: 88,
+                        borderRadius: 18,
+                        border: isActive ? "2px solid #e8a33d" : "2px solid transparent",
+                        overflow: "hidden",
+                        cursor: "pointer",
+                        flexShrink: 0,
+                        padding: 0,
+                        background: icon.type === "image" ? "#f8f6f3" : (isActive ? "#1a1a2e" : "#f8f6f3"),
+                      }}
                     >
                       {icon.type === "image" ? (
-                        <img src={icon.src} alt={cat} style={{ width: 24, height: 24, objectFit: "cover", borderRadius: 8 }} />
+                        <img src={icon.src} alt={cat} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
                       ) : (
-                        <span style={{ fontSize: 24 }}>{icon.value}</span>
+                        <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32 }}>{icon.value}</span>
                       )}
-                      <span>{cat === "Breads & Rice" ? "Breads" : cat}</span>
+                      <div
+                        style={{
+                          position: "absolute", left: 0, right: 0, bottom: 0,
+                          padding: "20px 6px 8px",
+                          background: "linear-gradient(transparent, rgba(0,0,0,0.72))",
+                          display: "flex", justifyContent: "center",
+                        }}
+                      >
+                        <span style={{ color: "#fff", fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.2, textAlign: "center", lineHeight: 1.15 }}>
+                          {cat === "Breads & Rice" ? "Breads" : cat}
+                        </span>
+                      </div>
                     </button>
                   );
                 })}
@@ -962,7 +1060,7 @@ function TableContent() {
 
             <div style={{ padding: "24px 20px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e" }}>{activeCategory === "All" ? "Popular Picks" : activeCategory}</h2>
+                <h2 style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 22, color: "#1a1a2e", textTransform: "uppercase", letterSpacing: 0.3 }}>{activeCategory === "All" ? "Popular Picks" : activeCategory}</h2>
                 {activeCategory === "All" && availableItems.length > POPULAR_LIMIT && (
                   <button onClick={() => { playTone(440, 70); setScreen("allMenu"); }} className="tap-btn" style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>View All →</button>
                 )}
@@ -995,7 +1093,7 @@ function TableContent() {
 
             {activeCategory === "All" && filteredItems.length > POPULAR_LIMIT && (
               <div style={{ padding: "0 20px 24px" }}>
-                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e", marginBottom: 16 }}>More to Explore</h2>
+                <h2 style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 22, color: "#1a1a2e", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 16 }}>More to Explore</h2>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
                   {filteredItems.slice(POPULAR_LIMIT).map((it) => (
                     <MenuCard key={it.id} item={it} qty={cart[it.id] || 0} onAdd={() => changeQty(it.id, 1)} />
