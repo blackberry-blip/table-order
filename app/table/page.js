@@ -21,49 +21,15 @@ import {
 const POPULAR_LIMIT = 8;
 
 const CATEGORY_ICONS = {
-  All: "🍽️",
-  Starters: "🥗",
-  Soups: "🍲",
-  Soup: "🍲",
-  Salads: "🥙",
-  Salad: "🥙",
-  Mains: "🍛",
-  "Main Course": "🍛",
-  "North Indian": "🍛",
-  "South Indian": "🥞",
-  Chinese: "🥡",
-  "Indo Chinese": "🥡",
-  Tandoor: "🍢",
-  Tandoori: "🍢",
-  Biryani: "🍚",
-  "Breads & Rice": "🍞",
-  Breads: "🫓",
-  Bread: "🫓",
-  Rice: "🍚",
-  Rolls: "🌯",
-  Wraps: "🌯",
-  Sandwiches: "🥪",
-  Pizza: "🍕",
-  Continental: "🍝",
-  Pasta: "🍝",
-  Sizzlers: "🔥",
-  Chaat: "🥘",
-  "Pan Asian": "🍜",
-  Noodles: "🍜",
-  Seafood: "🦐",
-  Grill: "🍖",
-  BBQ: "🍖",
-  Beverages: "🥤",
-  Drinks: "🥤",
-  Mocktails: "🍹",
-  Shakes: "🥤",
-  Milkshakes: "🥤",
-  Juices: "🧃",
-  Desserts: "🍰",
-  "Ice Cream": "🍨",
-  "Live Counter": "👨‍🍳",
-  Combos: "🍱",
-  "Kids Menu": "🧒",
+  All: "🍽️", Starters: "🥗", Soups: "🍲", Soup: "🍲", Salads: "🥙", Salad: "🥙",
+  Mains: "🍛", "Main Course": "🍛", "North Indian": "🍛", "South Indian": "🥞",
+  Chinese: "🥡", "Indo Chinese": "🥡", Tandoor: "🍢", Tandoori: "🍢", Biryani: "🍚",
+  "Breads & Rice": "🍞", Breads: "🫓", Bread: "🫓", Rice: "🍚", Rolls: "🌯",
+  Wraps: "🌯", Sandwiches: "🥪", Pizza: "🍕", Continental: "🍝", Pasta: "🍝",
+  Sizzlers: "🔥", Chaat: "🥘", "Pan Asian": "🍜", Noodles: "🍜", Seafood: "🦐",
+  Grill: "🍖", BBQ: "🍖", Beverages: "🥤", Drinks: "🥤", Mocktails: "🍹",
+  Shakes: "🥤", Milkshakes: "🥤", Juices: "🧃", Desserts: "🍰", "Ice Cream": "🍨",
+  "Live Counter": "👨‍🍳", Combos: "🍱", "Kids Menu": "🧒",
 };
 
 function getCategoryIcon(cat, categoryIconMap) {
@@ -139,33 +105,15 @@ const GLOBAL_ANIMATION_CSS = `
     85% { opacity: 0.9; }
     100% { transform: translateY(0) rotate(-8deg); opacity: 0; }
   }
-
   .tap-btn { transition: transform 0.12s ease, filter 0.12s ease; }
   .tap-btn:active { transform: scale(0.94); filter: brightness(0.97); }
-
   .cart-bump { display: inline-flex; animation: bump 0.4s ease; }
-
   .menu-card-plus-float {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    background: #1a1a2e;
-    color: #fff;
-    font-size: 12px;
-    font-weight: 800;
-    padding: 2px 9px;
-    border-radius: 100px;
-    animation: floatUp 0.7s ease forwards;
-    pointer-events: none;
-    z-index: 3;
+    position: absolute; top: 10px; right: 10px; background: #1a1a2e; color: #fff;
+    font-size: 12px; font-weight: 800; padding: 2px 9px; border-radius: 100px;
+    animation: floatUp 0.7s ease forwards; pointer-events: none; z-index: 3;
   }
-
-  .splash-food {
-    position: absolute;
-    font-size: 28px;
-    opacity: 0;
-    animation: foodFloat 3.4s ease-in-out infinite;
-  }
+  .splash-food { position: absolute; font-size: 28px; opacity: 0; animation: foodFloat 3.4s ease-in-out infinite; }
 `;
 
 // ---------------------------------------------------------------------------
@@ -173,92 +121,31 @@ const GLOBAL_ANIMATION_CSS = `
 // ---------------------------------------------------------------------------
 function MenuCard({ item, qty, onAdd, width }) {
   const [pulses, setPulses] = useState([]);
-
   function handleAdd() {
     const id = `${Date.now()}-${Math.random()}`;
     setPulses((p) => [...p, id]);
-    setTimeout(() => {
-      setPulses((p) => p.filter((x) => x !== id));
-    }, 700);
-    playTone(680, 90, "triangle");
-    onAdd();
+    setTimeout(() => { setPulses((p) => p.filter((x) => x !== id)); }, 700);
+    playTone(680, 90, "triangle"); onAdd();
   }
-
   return (
-    <div
-      style={{
-        background: "#fff",
-        borderRadius: 16,
-        overflow: "hidden",
-        boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
-        border: "1px solid #f0f0f0",
-        flexShrink: width ? 0 : undefined,
-        width: width || "auto",
-      }}
-    >
+    <div style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,0.06)", border: "1px solid #f0f0f0", flexShrink: width ? 0 : undefined, width: width || "auto" }}>
       <div style={{ position: "relative", height: 140, background: "#f8f6f3" }}>
         {item.imageUrl ? (
-          <img
-            src={item.imageUrl}
-            alt={item.name}
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            loading="eager"
-          />
+          <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="eager" />
         ) : (
-          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 40 }}>
-            🍽️
-          </div>
+          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 40 }}>🍽️</div>
         )}
-        {pulses.map((id) => (
-          <span key={id} className="menu-card-plus-float">+1</span>
-        ))}
-        <button
-          onClick={handleAdd}
-          className="tap-btn"
-          style={{
-            position: "absolute",
-            bottom: -16,
-            right: 12,
-            width: 36,
-            height: 36,
-            borderRadius: "50%",
-            border: "none",
-            background: "#e8a33d",
-            color: "#fff",
-            fontSize: 20,
-            fontWeight: 700,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            boxShadow: "0 2px 8px rgba(232,163,61,0.4)",
-          }}
-        >
-          +
-        </button>
+        {pulses.map((id) => (<span key={id} className="menu-card-plus-float">+1</span>))}
+        <button onClick={handleAdd} className="tap-btn" style={{ position: "absolute", bottom: -16, right: 12, width: 36, height: 36, borderRadius: "50%", border: "none", background: "#e8a33d", color: "#fff", fontSize: 20, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 8px rgba(232,163,61,0.4)" }}>+</button>
       </div>
       <div style={{ padding: "20px 12px 12px" }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: "#1a1a2e", marginBottom: 2, lineHeight: 1.3 }}>{item.name}</div>
         <div style={{ fontSize: 12, color: "#888", marginBottom: 8, lineHeight: 1.3, minHeight: 16 }}>
-          {item.description?.slice(0, 30)}
-          {item.description?.length > 30 ? "..." : ""}
+          {item.description?.slice(0, 30)}{item.description?.length > 30 ? "..." : ""}
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontWeight: 800, fontSize: 16, color: "#e8a33d" }}>₹{item.price}</span>
-          {qty > 0 && (
-            <span
-              style={{
-                background: "#1a1a2e",
-                color: "#fff",
-                padding: "2px 10px",
-                borderRadius: 100,
-                fontSize: 12,
-                fontWeight: 700,
-              }}
-            >
-              {qty}
-            </span>
-          )}
+          {qty > 0 && (<span style={{ background: "#1a1a2e", color: "#fff", padding: "2px 10px", borderRadius: 100, fontSize: 12, fontWeight: 700 }}>{qty}</span>)}
         </div>
       </div>
     </div>
@@ -267,42 +154,9 @@ function MenuCard({ item, qty, onAdd, width }) {
 
 function SuccessOverlay({ message }) {
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 200,
-        background: "rgba(26,26,46,0.55)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        animation: "fadeIn 0.25s ease",
-      }}
-    >
-      <div
-        style={{
-          background: "#fff",
-          borderRadius: 24,
-          padding: "36px 32px",
-          textAlign: "center",
-          boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
-          animation: "popIn 0.4s cubic-bezier(0.22,1,0.36,1)",
-          maxWidth: 280,
-        }}
-      >
-        <div
-          style={{
-            width: 64,
-            height: 64,
-            borderRadius: "50%",
-            background: "#e8a33d",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            margin: "0 auto 16px",
-            animation: "checkPop 0.5s ease 0.1s both",
-          }}
-        >
+    <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(26,26,46,0.55)", display: "flex", alignItems: "center", justifyContent: "center", animation: "fadeIn 0.25s ease" }}>
+      <div style={{ background: "#fff", borderRadius: 24, padding: "36px 32px", textAlign: "center", boxShadow: "0 12px 40px rgba(0,0,0,0.25)", animation: "popIn 0.4s cubic-bezier(0.22,1,0.36,1)", maxWidth: 280 }}>
+        <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#e8a33d", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", animation: "checkPop 0.5s ease 0.1s both" }}>
           <span style={{ fontSize: 32, color: "#fff" }}>✓</span>
         </div>
         <div style={{ fontSize: 17, fontWeight: 800, color: "#1a1a2e" }}>{message}</div>
@@ -313,30 +167,8 @@ function SuccessOverlay({ message }) {
 
 function StatusToast({ emoji, msg }) {
   return (
-    <div
-      style={{
-        position: "fixed",
-        top: 16,
-        left: "50%",
-        transform: "translateX(-50%)",
-        zIndex: 200,
-        background: "#1a1a2e",
-        color: "#fff",
-        padding: "12px 20px",
-        borderRadius: 100,
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        fontSize: 14,
-        fontWeight: 700,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
-        animation: "toastSlideDown 0.35s cubic-bezier(0.22,1,0.36,1)",
-        maxWidth: "90vw",
-        whiteSpace: "nowrap",
-      }}
-    >
-      <span style={{ fontSize: 18 }}>{emoji}</span>
-      <span>{msg}</span>
+    <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 200, background: "#1a1a2e", color: "#fff", padding: "12px 20px", borderRadius: 100, display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 700, boxShadow: "0 8px 24px rgba(0,0,0,0.25)", animation: "toastSlideDown 0.35s cubic-bezier(0.22,1,0.36,1)", maxWidth: "90vw", whiteSpace: "nowrap" }}>
+      <span style={{ fontSize: 18 }}>{emoji}</span><span>{msg}</span>
     </div>
   );
 }
@@ -372,7 +204,7 @@ function TableContent() {
 
   const heroScrollRef = useRef(null);
   const prevCartCountRef = useRef(0);
-  const prevOrderStatusRef = useRef(null);
+  const prevActiveOrdersRef = useRef([]);
 
   // Tick
   useEffect(() => {
@@ -422,7 +254,7 @@ function TableContent() {
     return () => unsub();
   }, [restaurantId]);
 
-  // Order listener - now tracks ALL active orders for this table
+  // Order listener — tracks ALL active orders for this table
   useEffect(() => {
     if (!tableNo || !restaurantId) return;
     const q = query(
@@ -434,7 +266,7 @@ function TableContent() {
       (snap) => {
         const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         const active = all
-          .filter((o) => !["paid", "cancelled", "declined"].includes(o.status))
+          .filter((o) => !["paid", "cancelled", "declined", "merged"].includes(o.status))
           .sort((a, b) => a.createdAt - b.createdAt);
         setActiveOrders(active);
       },
@@ -443,28 +275,28 @@ function TableContent() {
     return () => unsub();
   }, [tableNo, restaurantId]);
 
-  // Status toast on change - uses latest active order
-  const latestOrder = activeOrders[activeOrders.length - 1] || null;
-
+  // Status toast on any order status change
   useEffect(() => {
-    if (latestOrder && prevOrderStatusRef.current && prevOrderStatusRef.current !== latestOrder.status) {
-      const configs = {
-        confirmed: { emoji: "✅", msg: "Order confirmed!", tone: 520 },
-        preparing: { emoji: "👨‍🍳", msg: "Your food is being cooked!", tone: 600 },
-        ready: { emoji: "🔔", msg: "Your order is ready!", tone: 720 },
-        served: { emoji: "🎉", msg: "Enjoy your meal!", tone: 840 },
-      };
-      const cfg = configs[latestOrder.status];
-      if (cfg) {
-        playTone(cfg.tone, 180, "triangle");
-        setStatusToast(cfg);
-        const t = setTimeout(() => setStatusToast(null), 2600);
-        prevOrderStatusRef.current = latestOrder.status;
-        return () => clearTimeout(t);
+    const prev = prevActiveOrdersRef.current;
+    activeOrders.forEach((o) => {
+      const prevOrder = prev.find((p) => p.id === o.id);
+      if (prevOrder && prevOrder.status !== o.status) {
+        const configs = {
+          confirmed: { emoji: "✅", msg: "Order confirmed!", tone: 520 },
+          preparing: { emoji: "👨‍🍳", msg: "Your food is being cooked!", tone: 600 },
+          ready: { emoji: "🔔", msg: "Your order is ready!", tone: 720 },
+          served: { emoji: "🎉", msg: "Enjoy your meal!", tone: 840 },
+        };
+        const cfg = configs[o.status];
+        if (cfg) {
+          playTone(cfg.tone, 180, "triangle");
+          setStatusToast(cfg);
+          setTimeout(() => setStatusToast(null), 2600);
+        }
       }
-    }
-    prevOrderStatusRef.current = latestOrder?.status || null;
-  }, [latestOrder?.status]);
+    });
+    prevActiveOrdersRef.current = activeOrders;
+  }, [activeOrders]);
 
   // Hero auto-slide
   useEffect(() => {
@@ -523,9 +355,7 @@ function TableContent() {
   const availableItems = menuItems.filter((m) => m.available);
 
   const categoryIconMap = {};
-  categoryDocs.forEach((c) => {
-    if (c.imageUrl) categoryIconMap[c.name] = c.imageUrl;
-  });
+  categoryDocs.forEach((c) => { if (c.imageUrl) categoryIconMap[c.name] = c.imageUrl; });
   const itemCategoryNames = new Set(availableItems.map((m) => m.category));
   const orderedCategoryNames = categoryDocs.map((c) => c.name).filter((n) => itemCategoryNames.has(n));
   const looseCategoryNames = [...itemCategoryNames].filter((n) => !categoryDocs.some((c) => c.name === n));
@@ -538,9 +368,7 @@ function TableContent() {
     ? availableItems.filter((m) => m.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
     : [];
 
-  function findItem(id) {
-    return menuItems.find((m) => m.id === id);
-  }
+  function findItem(id) { return menuItems.find((m) => m.id === id); }
 
   function changeQty(id, delta) {
     setCart((prev) => {
@@ -557,7 +385,7 @@ function TableContent() {
     setTimeout(() => setSuccessOverlay(null), 1600);
   }
 
-  // Unified submit function - creates a NEW order document every time
+  // Unified submit — creates a NEW order document every time
   async function submitCart() {
     const items = Object.entries(cart).map(([id, qty]) => {
       const item = findItem(id);
@@ -581,13 +409,42 @@ function TableContent() {
     triggerSuccessOverlay(activeOrders.length > 0 ? "Added to your order!" : "Order placed!");
   }
 
-  // Request bill for all served orders
+  // Request bill — merges ALL served orders into ONE combined bill
   async function requestBill() {
+    const servedOrders = activeOrders.filter((o) => o.status === "served");
+    if (servedOrders.length === 0) return;
+
+    // Merge items (sum quantities for same item name)
+    const mergedMap = {};
+    servedOrders.forEach((o) => {
+      o.items.forEach((it) => {
+        if (mergedMap[it.name]) {
+          mergedMap[it.name].qty += it.qty;
+        } else {
+          mergedMap[it.name] = { ...it };
+        }
+      });
+    });
+    const mergedItems = Object.values(mergedMap);
+
+    // Create one combined bill order
+    await addDoc(collection(db, "restaurants", restaurantId, "orders"), {
+      table: tableNo,
+      items: mergedItems,
+      status: "bill_requested",
+      etaMinutes: null,
+      preparingAt: null,
+      createdAt: Date.now(),
+    });
+
+    // Mark original served orders as merged so they disappear from active
     const batch = writeBatch(db);
-    activeOrders
-      .filter((o) => o.status === "served")
-      .forEach((o) => batch.update(doc(db, "restaurants", restaurantId, "orders", o.id), { status: "bill_requested" }));
+    servedOrders.forEach((o) => {
+      batch.update(doc(db, "restaurants", restaurantId, "orders", o.id), { status: "merged" });
+    });
     await batch.commit();
+
+    playTone(700, 90, "triangle");
   }
 
   function getCountdown(o) {
@@ -613,6 +470,8 @@ function TableContent() {
     preparing: "Being cooked",
     ready: "Ready — on its way to your table",
     served: "Served. Enjoy!",
+    bill_requested: "Bill Requested",
+    billed: "Awaiting payment",
   };
 
   const bottomCartBar = (count > 0 || activeOrders.length > 0) ? (
@@ -620,47 +479,20 @@ function TableContent() {
       <button
         onClick={() => {
           playTone(560, 70, "sine");
-          if (count > 0) {
-            setShowCartSummary(true);
-          } else if (activeOrders.length > 0) {
-            setAddingMore(false);
-            setScreen("menu");
-          }
+          if (count > 0) { setShowCartSummary(true); }
+          else if (activeOrders.length > 0) { setAddingMore(false); }
         }}
         className="tap-btn"
         style={{
-          width: "100%",
-          maxWidth: 480,
-          margin: "0 auto",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 10,
-          padding: 14,
-          borderRadius: 50,
-          border: "none",
-          background: "#1a1a2e",
-          color: "#fff",
-          fontSize: 15,
-          fontWeight: 700,
-          cursor: "pointer",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
+          width: "100%", maxWidth: 480, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+          padding: 14, borderRadius: 50, border: "none", background: "#1a1a2e", color: "#fff", fontSize: 15, fontWeight: 700,
+          cursor: "pointer", boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
         }}
       >
         <span style={{ position: "relative" }} className={cartBump ? "cart-bump" : ""}>
           🛒
           {count > 0 && (
-            <span style={{
-              position: "absolute",
-              top: -8,
-              right: -8,
-              background: "#e8a33d",
-              color: "#1a1a2e",
-              fontSize: 11,
-              fontWeight: 800,
-              padding: "1px 6px",
-              borderRadius: 100,
-            }}>
+            <span style={{ position: "absolute", top: -8, right: -8, background: "#e8a33d", color: "#1a1a2e", fontSize: 11, fontWeight: 800, padding: "1px 6px", borderRadius: 100 }}>
               {count}
             </span>
           )}
@@ -671,37 +503,19 @@ function TableContent() {
   ) : null;
 
   const cartSummaryModal = showCartSummary ? (
-    <div
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
-      onClick={() => setShowCartSummary(false)}
-    >
-      <div
-        style={{
-          background: "#fff",
-          borderRadius: "24px 24px 0 0",
-          width: "100%",
-          maxWidth: 480,
-          maxHeight: "80vh",
-          overflow: "auto",
-          padding: 24,
-          animation: "slideUp 0.3s ease",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setShowCartSummary(false)}>
+      <div style={{ background: "#fff", borderRadius: "24px 24px 0 0", width: "100%", maxWidth: 480, maxHeight: "80vh", overflow: "auto", padding: 24, animation: "slideUp 0.3s ease" }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ fontSize: 20, fontWeight: 800 }}>Your Cart</h3>
           <button onClick={() => setShowCartSummary(false)} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: "#888" }}>×</button>
         </div>
-
         {Object.entries(cart).map(([id, qty]) => {
           const item = findItem(id);
           if (!item) return null;
           return (
             <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #f0f0f0" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                {item.imageUrl && (
-                  <img src={item.imageUrl} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: "cover" }} />
-                )}
+                {item.imageUrl && (<img src={item.imageUrl} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: "cover" }} />)}
                 <div>
                   <div style={{ fontWeight: 600 }}>{item.name}</div>
                   <div style={{ fontSize: 13, color: "#888" }}>₹{item.price} × {qty}</div>
@@ -715,28 +529,10 @@ function TableContent() {
             </div>
           );
         })}
-
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20, paddingTop: 16, borderTop: "2px solid #1a1a2e", fontSize: 18, fontWeight: 800 }}>
-          <span>Total</span>
-          <span>₹{total}</span>
+          <span>Total</span><span>₹{total}</span>
         </div>
-
-        <button
-          onClick={submitCart}
-          className="tap-btn"
-          style={{
-            width: "100%",
-            marginTop: 20,
-            padding: 16,
-            borderRadius: 14,
-            border: "none",
-            background: "#e8a33d",
-            color: "#1a1a2e",
-            fontSize: 16,
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
+        <button onClick={submitCart} className="tap-btn" style={{ width: "100%", marginTop: 20, padding: 16, borderRadius: 14, border: "none", background: "#e8a33d", color: "#1a1a2e", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
           {activeOrders.length > 0 ? "Add to Order" : "Place Order"}
         </button>
       </div>
@@ -763,40 +559,18 @@ function TableContent() {
       <div
         onClick={dismissSplash}
         style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 999,
-          cursor: "pointer",
+          position: "fixed", inset: 0, zIndex: 999, cursor: "pointer",
           background: "linear-gradient(135deg, #1a1a2e 0%, #241f3d 55%, #2d1b1b 100%)",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          opacity: splashLeaving ? 0 : 1,
-          transition: "opacity 0.45s ease",
-          overflow: "hidden",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          opacity: splashLeaving ? 0 : 1, transition: "opacity 0.45s ease", overflow: "hidden",
         }}
       >
         {foodEmojis.map((e, i) => (
-          <span
-            key={i}
-            className="splash-food"
-            style={{
-              left: `${8 + i * 11}%`,
-              top: `${18 + (i % 3) * 24}%`,
-              animationDelay: `${i * 0.3}s`,
-            }}
-          >
-            {e}
-          </span>
+          <span key={i} className="splash-food" style={{ left: `${8 + i * 11}%`, top: `${18 + (i % 3) * 24}%`, animationDelay: `${i * 0.3}s` }}>{e}</span>
         ))}
         <div style={{ animation: "splashPop 0.9s cubic-bezier(0.22, 1, 0.36, 1)", textAlign: "center", padding: 20, position: "relative", zIndex: 1 }}>
           {profile?.logoUrl && (
-            <img
-              src={profile.logoUrl}
-              alt=""
-              style={{ width: 74, height: 74, borderRadius: "50%", objectFit: "cover", margin: "0 auto 20px", display: "block", border: "3px solid rgba(232,163,61,0.6)", animation: "splashGlow 2.2s ease-in-out infinite" }}
-            />
+            <img src={profile.logoUrl} alt="" style={{ width: 74, height: 74, borderRadius: "50%", objectFit: "cover", margin: "0 auto 20px", display: "block", border: "3px solid rgba(232,163,61,0.6)", animation: "splashGlow 2.2s ease-in-out infinite" }} />
           )}
           <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 34, fontWeight: 700, color: "#fff", letterSpacing: 0.5, animation: "splashLetters 1s ease" }}>
             {profile?.name || "Welcome"}
@@ -817,20 +591,14 @@ function TableContent() {
         <div style={{ maxWidth: 480, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 32 }}>
             {profile?.logoUrl && (
-              <img
-                src={profile.logoUrl}
-                alt="logo"
-                style={{ width: 80, height: 80, borderRadius: "50%", objectFit: "cover", marginBottom: 16 }}
-              />
+              <img src={profile.logoUrl} alt="logo" style={{ width: 80, height: 80, borderRadius: "50%", objectFit: "cover", marginBottom: 16 }} />
             )}
             <h1 style={{ fontSize: 26, fontWeight: 800, color: "#1a1a2e" }}>{profile?.name || "Welcome"}</h1>
             {profile?.tagline && <p style={{ color: "#888", marginTop: 4, fontSize: 14 }}>{profile.tagline}</p>}
           </div>
-
           <div style={{ background: "#fff", borderRadius: 20, padding: 24, boxShadow: "0 4px 20px rgba(0,0,0,0.08)", marginBottom: 20 }}>
             <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>Which table are you at?</h2>
             <p style={{ fontSize: 14, color: "#888", marginBottom: 20 }}>Select your table number to view the menu</p>
-
             {tables.length === 0 ? (
               <div style={{ textAlign: "center", padding: 40, color: "#888" }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>🪑</div>
@@ -843,24 +611,9 @@ function TableContent() {
                     key={t.id}
                     onClick={() => { playTone(520, 80, "triangle"); setTableNo(t.number); }}
                     className="tap-btn"
-                    style={{
-                      padding: "20px 8px",
-                      fontSize: 22,
-                      fontWeight: 700,
-                      borderRadius: 16,
-                      border: "2px solid #eee",
-                      background: "#fff",
-                      color: "#1a1a2e",
-                      cursor: "pointer",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = "#e8a33d";
-                      e.currentTarget.style.background = "#fff5e0";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = "#eee";
-                      e.currentTarget.style.background = "#fff";
-                    }}
+                    style={{ padding: "20px 8px", fontSize: 22, fontWeight: 700, borderRadius: 16, border: "2px solid #eee", background: "#fff", color: "#1a1a2e", cursor: "pointer" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#e8a33d"; e.currentTarget.style.background = "#fff5e0"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#eee"; e.currentTarget.style.background = "#fff"; }}
                   >
                     {t.number}
                   </button>
@@ -873,10 +626,100 @@ function TableContent() {
     );
   }
 
-  // ---------- Unified Status + Bill screen ----------
+  // Determine if we should show the unified bill screen (only bill-related orders remain)
+  const hasPreBillOrders = activeOrders.some((o) => ["pending", "confirmed", "preparing", "ready", "served"].includes(o.status));
+  const billOrders = activeOrders.filter((o) => ["bill_requested", "billed"].includes(o.status));
+  const showBillScreen = !hasPreBillOrders && billOrders.length > 0;
+
+  // ---------- Bill screen ----------
+  if (showBillScreen && !addingMore) {
+    const o = billOrders[billOrders.length - 1]; // latest bill order
+    const billSubtotal = o.items.reduce((sum, it) => sum + it.price * it.qty, 0);
+    return (
+      <div style={{ minHeight: "100vh", background: "#f8f6f3", padding: 24, fontFamily: "sans-serif" }}>
+        <div style={{ maxWidth: 480, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+            {profile?.logoUrl && (<img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }} />)}
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 18 }}>{profile?.name || "Table Order"}</div>
+              <div style={{ fontSize: 13, color: "#888" }}>Table {tableNo}</div>
+            </div>
+          </div>
+
+          {o.status === "bill_requested" && (
+            <div style={{ background: "linear-gradient(135deg, #fff5e0 0%, #fef3c7 100%)", borderRadius: 20, padding: 32, textAlign: "center", marginBottom: 20, border: "1px solid #fde68a" }}>
+              <div style={{ fontSize: 48, marginBottom: 12 }}>🧾</div>
+              <h3 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Bill Requested</h3>
+              <p style={{ color: "#92400e", fontSize: 14 }}>The front desk is preparing your bill now.</p>
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px dashed #fde68a" }}>
+                {o.items.map((it, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 14 }}>
+                    <span>{it.name} <span style={{ color: "#888" }}>×{it.qty}</span></span>
+                    <span>₹{it.price * it.qty}</span>
+                  </div>
+                ))}
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, paddingTop: 10, borderTop: "2px solid #1a1a2e", fontWeight: 800, fontSize: 16 }}>
+                  <span>Subtotal</span><span>₹{billSubtotal}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {o.status === "billed" && (
+            <div style={{ background: "#fff", borderRadius: 20, padding: 0, overflow: "hidden", boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
+              <div style={{ padding: "24px 24px 16px", borderBottom: "2px dashed #eee" }}>
+                <div style={{ textAlign: "center", marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, color: "#888", textTransform: "uppercase", letterSpacing: 1 }}>Receipt</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, marginTop: 4 }}>{profile?.name || "Table Order"}</div>
+                  <div style={{ fontSize: 12, color: "#888" }}>Table {tableNo}</div>
+                </div>
+                {o.items.map((it, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontSize: 15, borderBottom: i < o.items.length - 1 ? "1px dotted #eee" : "none" }}>
+                    <span>{it.name} <span style={{ color: "#888" }}>×{it.qty}</span></span>
+                    <span style={{ fontWeight: 600 }}>₹{it.price * it.qty}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ padding: 20, background: "#f8f6f3" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6 }}>
+                  <span style={{ color: "#888" }}>Subtotal</span><span>₹{o.billSubtotal ?? billSubtotal}</span>
+                </div>
+                {o.billTaxAmount > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6, color: "#888" }}>
+                    <span>Tax ({o.billTaxPercent}%)</span><span>₹{o.billTaxAmount}</span>
+                  </div>
+                )}
+                {o.billServiceAmount > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6, color: "#888" }}>
+                    <span>Service ({o.billServicePercent}%)</span><span>₹{o.billServiceAmount}</span>
+                  </div>
+                )}
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 22, fontWeight: 800, marginTop: 10, paddingTop: 10, borderTop: "2px solid #1a1a2e" }}>
+                  <span>Total</span><span>₹{o.billTotal ?? billSubtotal}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div style={{ textAlign: "center", marginTop: 24, fontSize: 13, color: "#888" }}>
+            Awaiting payment — pay at the counter or with staff.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- Status screen ----------
   if (activeOrders.length > 0 && !addingMore) {
+    // Dominant order = the one that should drive the big black box
+    const dominantOrder = activeOrders.find((o) => o.status === "preparing")
+      || activeOrders.find((o) => o.status === "ready")
+      || activeOrders.find((o) => o.status === "confirmed")
+      || activeOrders.find((o) => o.status === "pending")
+      || activeOrders[activeOrders.length - 1];
+
     const allServed = activeOrders.every((o) => o.status === "served");
-    const anyBillRequested = activeOrders.some((o) => o.status === "bill_requested");
+    const dominantCountdown = getCountdown(dominantOrder);
 
     return (
       <div style={{ minHeight: "100vh", background: "#f8f6f3", padding: 24, fontFamily: "sans-serif", paddingBottom: 100 }}>
@@ -884,42 +727,35 @@ function TableContent() {
         {successOverlay && <SuccessOverlay message={successOverlay} />}
         <div style={{ maxWidth: 480, margin: "0 auto" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-            {profile?.logoUrl && <img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }} />}
+            {profile?.logoUrl && (<img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }} />)}
             <div>
               <div style={{ fontWeight: 700, fontSize: 18 }}>{profile?.name || "Table Order"}</div>
               <div style={{ fontSize: 13, color: "#888" }}>Table {tableNo}</div>
             </div>
           </div>
 
+          {/* Big black status box — retained exactly as requested */}
+          <div style={{ background: "#1C1B1A", color: "#fff", borderRadius: 20, padding: 32, textAlign: "center", marginBottom: 24 }}>
+            <div style={{ fontSize: 22, fontWeight: 600 }}>{statusWords[dominantOrder.status] || dominantOrder.status}</div>
+            {dominantOrder.status === "preparing" && dominantCountdown && (
+              <div style={{ fontSize: 48, marginTop: 14, fontFamily: "monospace", fontWeight: 700, letterSpacing: 2, color: "#e8a33d" }}>
+                {dominantCountdown}
+              </div>
+            )}
+          </div>
+
+          {/* Individual order cards */}
           {activeOrders.map((o) => {
             const countdown = getCountdown(o);
-            if (o.status === "billed") {
-              return (
-                <div key={o.id} style={{ background: "#fff", borderRadius: 20, overflow: "hidden", boxShadow: "0 4px 20px rgba(0,0,0,0.06)", marginBottom: 16 }}>
-                  <div style={{ padding: "20px 24px", borderBottom: "2px dashed #eee" }}>
-                    <div style={{ fontSize: 12, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Receipt</div>
-                    {o.items.map((it, i) => (
-                      <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 14 }}>
-                        <span>{it.name} ×{it.qty}</span><span>₹{it.price * it.qty}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ padding: 16, background: "#f8f6f3" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800 }}>
-                      <span>Total</span><span>₹{o.billTotal}</span>
-                    </div>
-                    <div style={{ fontSize: 12, color: "#888", marginTop: 6 }}>Awaiting payment — pay at the counter.</div>
-                  </div>
-                </div>
-              );
-            }
             return (
               <div key={o.id} style={{ background: "#fff", borderRadius: 16, padding: 20, marginBottom: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.04)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                   <span style={{ fontWeight: 700, fontSize: 14 }}>Order · {new Date(o.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: "#e8a33d" }}>{statusWords[o.status] || o.status}</span>
                 </div>
-                {countdown && <div style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, color: "#e8a33d", marginBottom: 10 }}>{countdown}</div>}
+                {countdown && o.status === "preparing" && (
+                  <div style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, color: "#e8a33d", marginBottom: 10 }}>{countdown}</div>
+                )}
                 {o.items.map((it, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 14, borderTop: i > 0 ? "1px solid #f4f4f4" : "none" }}>
                     <span>{it.name}</span><span style={{ fontWeight: 700 }}>×{it.qty}</span>
@@ -930,17 +766,35 @@ function TableContent() {
           })}
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <button onClick={() => { playTone(560, 70); setAddingMore(true); setScreen("menu"); }} className="tap-btn"
-              style={{ width: "100%", padding: 16, fontSize: 15, fontWeight: 600, borderRadius: 14, border: "2px solid #1a1a2e", background: "#fff", color: "#1a1a2e", cursor: "pointer" }}>
-              ➕ Add more items
+            <button
+              onClick={() => { playTone(560, 70); setAddingMore(true); }}
+              className="tap-btn"
+              style={{ width: "100%", padding: 16, fontSize: 15, fontWeight: 600, borderRadius: 14, border: "2px solid #1a1a2e", background: "#fff", color: "#1a1a2e", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+            >
+              <span>➕</span> Add more items
             </button>
-            {allServed && !anyBillRequested && (
-              <button onClick={() => { playTone(700, 90, "triangle"); requestBill(); }} className="tap-btn"
-                style={{ width: "100%", padding: 16, fontSize: 16, fontWeight: 700, borderRadius: 14, border: "none", background: "#e8a33d", color: "#1a1a2e", cursor: "pointer" }}>
+            {allServed && (
+              <button
+                onClick={() => { playTone(700, 90, "triangle"); requestBill(); }}
+                className="tap-btn"
+                style={{ width: "100%", padding: 16, fontSize: 16, fontWeight: 700, borderRadius: 14, border: "none", background: "#e8a33d", color: "#1a1a2e", cursor: "pointer" }}
+              >
                 🧾 Request Bill
               </button>
             )}
           </div>
+        </div>
+
+        {/* Bottom bar on status screen */}
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
+          <button
+            onClick={() => { playTone(560, 70); setAddingMore(true); }}
+            className="tap-btn"
+            style={{ width: "100%", maxWidth: 480, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: 14, borderRadius: 50, border: "none", background: "#1a1a2e", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}
+          >
+            <span>🛒</span>
+            {count > 0 ? `${count} items · ₹${total}` : "Browse Menu"}
+          </button>
         </div>
       </div>
     );
@@ -951,7 +805,6 @@ function TableContent() {
     return (
       <div style={{ minHeight: "100vh", background: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", paddingBottom: 100 }}>
         {successOverlay && <SuccessOverlay message={successOverlay} />}
-
         <div style={{ position: "sticky", top: 0, zIndex: 10, background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
           <div style={{ maxWidth: 480, margin: "0 auto", padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
             <button
@@ -959,13 +812,10 @@ function TableContent() {
               className="tap-btn"
               style={{ width: 36, height: 36, borderRadius: "50%", border: "1px solid #eee", background: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#1a1a2e", flexShrink: 0 }}
               aria-label="Back"
-            >
-              ←
-            </button>
+            >←</button>
             <div style={{ fontWeight: 800, fontSize: 18, color: "#1a1a2e" }}>Full Menu</div>
           </div>
         </div>
-
         <div style={{ maxWidth: 480, margin: "0 auto", padding: 20 }}>
           {availableItems.length === 0 ? (
             <div style={{ textAlign: "center", padding: 40, color: "#888" }}>
@@ -980,7 +830,6 @@ function TableContent() {
             </div>
           )}
         </div>
-
         {bottomCartBar}
         {cartSummaryModal}
       </div>
@@ -991,11 +840,8 @@ function TableContent() {
   return (
     <div style={{ minHeight: "100vh", background: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", paddingBottom: 100 }}>
       <style jsx>{`
-        .hscroll::-webkit-scrollbar {
-          display: none;
-        }
+        .hscroll::-webkit-scrollbar { display: none; }
       `}</style>
-
       {successOverlay && <SuccessOverlay message={successOverlay} />}
 
       <div style={{ background: "linear-gradient(135deg, #fff5e0 0%, #fef3c7 100%)", position: "sticky", top: 0, zIndex: 10 }}>
@@ -1021,9 +867,7 @@ function TableContent() {
               onClick={() => { playTone(440, 70); setAddingMore(false); setCart({}); setScreen("menu"); }}
               className="tap-btn"
               style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 12, padding: 0 }}
-            >
-              ← Back to order status
-            </button>
+            >← Back to order status</button>
           )}
 
           <div style={{ position: "relative" }}>
@@ -1033,17 +877,7 @@ function TableContent() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search for dishes..."
-              style={{
-                width: "100%",
-                padding: "12px 16px 12px 42px",
-                borderRadius: 14,
-                border: "none",
-                background: "#fff",
-                fontSize: 14,
-                outline: "none",
-                boxSizing: "border-box",
-                color: "#1a1a2e",
-              }}
+              style={{ width: "100%", padding: "12px 16px 12px 42px", borderRadius: 14, border: "none", background: "#fff", fontSize: 14, outline: "none", boxSizing: "border-box", color: "#1a1a2e" }}
             />
           </div>
         </div>
@@ -1052,9 +886,7 @@ function TableContent() {
       <div style={{ maxWidth: 480, margin: "0 auto" }}>
         {isSearching ? (
           <div style={{ padding: "20px 20px 24px" }}>
-            <h2 style={{ fontSize: 18, fontWeight: 800, color: "#1a1a2e", marginBottom: 16 }}>
-              Results for &ldquo;{searchQuery}&rdquo;
-            </h2>
+            <h2 style={{ fontSize: 18, fontWeight: 800, color: "#1a1a2e", marginBottom: 16 }}>Results for &ldquo;{searchQuery}&rdquo;</h2>
             {searchResults.length === 0 ? (
               <div style={{ textAlign: "center", padding: 40, color: "#888" }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>🔍</div>
@@ -1076,65 +908,20 @@ function TableContent() {
                   ref={heroScrollRef}
                   onScroll={handleHeroScroll}
                   className="hscroll"
-                  style={{
-                    display: "flex",
-                    overflowX: "auto",
-                    scrollSnapType: "x mandatory",
-                    borderRadius: 20,
-                    WebkitOverflowScrolling: "touch",
-                    scrollbarWidth: "none",
-                  }}
+                  style={{ display: "flex", overflowX: "auto", scrollSnapType: "x mandatory", borderRadius: 20, WebkitOverflowScrolling: "touch", scrollbarWidth: "none" }}
                 >
                   {heroItems.map((item) => (
-                    <div
-                      key={item.id}
-                      style={{
-                        flex: "0 0 100%",
-                        scrollSnapAlign: "start",
-                        position: "relative",
-                        aspectRatio: "5 / 4",
-                        background: "#1a1a2e",
-                      }}
-                    >
-                      <img
-                        src={item.imageUrl}
-                        alt={item.name}
-                        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7 }}
-                      />
-                      <div
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          display: "flex",
-                          alignItems: "flex-end",
-                          background: "linear-gradient(transparent, rgba(0,0,0,0.7))",
-                        }}
-                      >
+                    <div key={item.id} style={{ flex: "0 0 100%", scrollSnapAlign: "start", position: "relative", aspectRatio: "5 / 4", background: "#1a1a2e" }}>
+                      <img src={item.imageUrl} alt={item.name} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7 }} />
+                      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", background: "linear-gradient(transparent, rgba(0,0,0,0.7))" }}>
                         <div style={{ padding: 20, width: "100%" }}>
                           <div style={{ color: "#fff", fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{item.name}</div>
-                          <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13, marginBottom: 10 }}>
-                            {item.description || "Chef's special pick"}
-                          </div>
+                          <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13, marginBottom: 10 }}>{item.description || "Chef's special pick"}</div>
                           <button
-                            onClick={() => {
-                              playTone(680, 90, "triangle");
-                              changeQty(item.id, 1);
-                              setShowCartSummary(true);
-                            }}
+                            onClick={() => { playTone(680, 90, "triangle"); changeQty(item.id, 1); setShowCartSummary(true); }}
                             className="tap-btn"
-                            style={{
-                              padding: "8px 20px",
-                              borderRadius: 50,
-                              border: "none",
-                              background: "#e8a33d",
-                              color: "#1a1a2e",
-                              fontWeight: 700,
-                              fontSize: 14,
-                              cursor: "pointer",
-                            }}
-                          >
-                            Order Now →
-                          </button>
+                            style={{ padding: "8px 20px", borderRadius: 50, border: "none", background: "#e8a33d", color: "#1a1a2e", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
+                          >Order Now →</button>
                         </div>
                       </div>
                     </div>
@@ -1143,17 +930,7 @@ function TableContent() {
                 {heroItems.length > 1 && (
                   <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 10 }}>
                     {heroItems.map((_, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => scrollHeroTo(idx)}
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: "50%",
-                          background: idx === heroIndex ? "#e8a33d" : "#ddd",
-                          cursor: "pointer",
-                        }}
-                      />
+                      <div key={idx} onClick={() => scrollHeroTo(idx)} style={{ width: 8, height: 8, borderRadius: "50%", background: idx === heroIndex ? "#e8a33d" : "#ddd", cursor: "pointer" }} />
                     ))}
                   </div>
                 )}
@@ -1169,22 +946,7 @@ function TableContent() {
                       key={cat}
                       onClick={() => { playTone(500, 60); setActiveCategory(cat); }}
                       className="tap-btn"
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "10px 14px",
-                        borderRadius: 16,
-                        border: "none",
-                        background: activeCategory === cat ? "#1a1a2e" : "#f8f6f3",
-                        color: activeCategory === cat ? "#fff" : "#666",
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: "pointer",
-                        minWidth: 70,
-                        flexShrink: 0,
-                      }}
+                      style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "10px 14px", borderRadius: 16, border: "none", background: activeCategory === cat ? "#1a1a2e" : "#f8f6f3", color: activeCategory === cat ? "#fff" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", minWidth: 70, flexShrink: 0 }}
                     >
                       {icon.type === "image" ? (
                         <img src={icon.src} alt={cat} style={{ width: 24, height: 24, objectFit: "cover", borderRadius: 8 }} />
@@ -1200,27 +962,12 @@ function TableContent() {
 
             <div style={{ padding: "24px 20px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e" }}>
-                  {activeCategory === "All" ? "Popular Picks" : activeCategory}
-                </h2>
-
+                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e" }}>{activeCategory === "All" ? "Popular Picks" : activeCategory}</h2>
                 {activeCategory === "All" && availableItems.length > POPULAR_LIMIT && (
-                  <button
-                    onClick={() => { playTone(440, 70); setScreen("allMenu"); }}
-                    className="tap-btn"
-                    style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}
-                  >
-                    View All →
-                  </button>
+                  <button onClick={() => { playTone(440, 70); setScreen("allMenu"); }} className="tap-btn" style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>View All →</button>
                 )}
                 {activeCategory !== "All" && (
-                  <button
-                    onClick={() => { playTone(440, 70); setActiveCategory("All"); }}
-                    className="tap-btn"
-                    style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}
-                  >
-                    View All →
-                  </button>
+                  <button onClick={() => { playTone(440, 70); setActiveCategory("All"); }} className="tap-btn" style={{ background: "none", border: "none", color: "#e8a33d", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>View All →</button>
                 )}
               </div>
 
