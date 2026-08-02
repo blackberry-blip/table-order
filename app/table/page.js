@@ -12,6 +12,7 @@ import {
   query,
   where,
   orderBy,
+  writeBatch,
 } from "firebase/firestore";
 
 // ---------------------------------------------------------------------------
@@ -349,7 +350,7 @@ function TableContent() {
   const restaurantId = searchParams.get("restaurant");
 
   const [tableNo, setTableNo] = useState(tableParam ? parseInt(tableParam) : null);
-  const [order, setOrder] = useState(null);
+  const [activeOrders, setActiveOrders] = useState([]);
   const [cart, setCart] = useState({});
   const [addingMore, setAddingMore] = useState(false);
   const [tick, setTick] = useState(0);
@@ -421,43 +422,49 @@ function TableContent() {
     return () => unsub();
   }, [restaurantId]);
 
-  // Order listener
+  // Order listener - now tracks ALL active orders for this table
   useEffect(() => {
     if (!tableNo || !restaurantId) return;
     const q = query(
       collection(db, "restaurants", restaurantId, "orders"),
       where("table", "==", tableNo)
     );
-    const unsub = onSnapshot(q, (snap) => {
-      const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      const activeOrder = all
-        .filter((o) => o.status !== "paid")
-        .sort((a, b) => b.createdAt - a.createdAt)[0];
-      setOrder(activeOrder || null);
-    });
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const active = all
+          .filter((o) => !["paid", "cancelled", "declined"].includes(o.status))
+          .sort((a, b) => a.createdAt - b.createdAt);
+        setActiveOrders(active);
+      },
+      (err) => console.error("Order listener failed:", err.code, err.message)
+    );
     return () => unsub();
   }, [tableNo, restaurantId]);
 
-  // Status toast on change
+  // Status toast on change - uses latest active order
+  const latestOrder = activeOrders[activeOrders.length - 1] || null;
+
   useEffect(() => {
-    if (order && prevOrderStatusRef.current && prevOrderStatusRef.current !== order.status) {
+    if (latestOrder && prevOrderStatusRef.current && prevOrderStatusRef.current !== latestOrder.status) {
       const configs = {
         confirmed: { emoji: "✅", msg: "Order confirmed!", tone: 520 },
         preparing: { emoji: "👨‍🍳", msg: "Your food is being cooked!", tone: 600 },
         ready: { emoji: "🔔", msg: "Your order is ready!", tone: 720 },
         served: { emoji: "🎉", msg: "Enjoy your meal!", tone: 840 },
       };
-      const cfg = configs[order.status];
+      const cfg = configs[latestOrder.status];
       if (cfg) {
         playTone(cfg.tone, 180, "triangle");
         setStatusToast(cfg);
         const t = setTimeout(() => setStatusToast(null), 2600);
-        prevOrderStatusRef.current = order.status;
+        prevOrderStatusRef.current = latestOrder.status;
         return () => clearTimeout(t);
       }
     }
-    prevOrderStatusRef.current = order?.status || null;
-  }, [order?.status]);
+    prevOrderStatusRef.current = latestOrder?.status || null;
+  }, [latestOrder?.status]);
 
   // Hero auto-slide
   useEffect(() => {
@@ -550,11 +557,13 @@ function TableContent() {
     setTimeout(() => setSuccessOverlay(null), 1600);
   }
 
-  async function placeOrder() {
+  // Unified submit function - creates a NEW order document every time
+  async function submitCart() {
     const items = Object.entries(cart).map(([id, qty]) => {
       const item = findItem(id);
       return { name: item.name, qty, price: item.price };
     });
+    if (items.length === 0) return;
 
     await addDoc(collection(db, "restaurants", restaurantId, "orders"), {
       table: tableNo,
@@ -567,39 +576,18 @@ function TableContent() {
 
     setCart({});
     setShowCartSummary(false);
-    setScreen("menu");
-    triggerSuccessOverlay("Order placed!");
-  }
-
-  async function addMoreItems() {
-    const newItems = Object.entries(cart).map(([id, qty]) => {
-      const item = findItem(id);
-      return { name: item.name, qty, price: item.price };
-    });
-
-    const merged = [...order.items];
-    newItems.forEach((ni) => {
-      const existing = merged.find((m) => m.name === ni.name);
-      if (existing) existing.qty += ni.qty;
-      else merged.push(ni);
-    });
-
-    await updateDoc(doc(db, "restaurants", restaurantId, "orders", order.id), {
-      items: merged,
-      status: "pending",
-      etaMinutes: null,
-      preparingAt: null,
-    });
-
-    setCart({});
     setAddingMore(false);
-    setShowCartSummary(false);
     setScreen("menu");
-    triggerSuccessOverlay("Added to your order!");
+    triggerSuccessOverlay(activeOrders.length > 0 ? "Added to your order!" : "Order placed!");
   }
 
+  // Request bill for all served orders
   async function requestBill() {
-    await updateDoc(doc(db, "restaurants", restaurantId, "orders", order.id), { status: "bill_requested" });
+    const batch = writeBatch(db);
+    activeOrders
+      .filter((o) => o.status === "served")
+      .forEach((o) => batch.update(doc(db, "restaurants", restaurantId, "orders", o.id), { status: "bill_requested" }));
+    await batch.commit();
   }
 
   function getCountdown(o) {
@@ -627,13 +615,17 @@ function TableContent() {
     served: "Served. Enjoy!",
   };
 
-  const bottomCartBar = (count > 0 || order) ? (
+  const bottomCartBar = (count > 0 || activeOrders.length > 0) ? (
     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
       <button
         onClick={() => {
           playTone(560, 70, "sine");
-          if (order) setAddingMore(true);
-          else setShowCartSummary(true);
+          if (count > 0) {
+            setShowCartSummary(true);
+          } else if (activeOrders.length > 0) {
+            setAddingMore(false);
+            setScreen("menu");
+          }
         }}
         className="tap-btn"
         style={{
@@ -673,7 +665,7 @@ function TableContent() {
             </span>
           )}
         </span>
-        {count > 0 ? `View Cart · ₹${total}` : "View Order Status"}
+        {count > 0 ? `View Cart · ₹${total}` : "Back to Order Status"}
       </button>
     </div>
   ) : null;
@@ -730,7 +722,7 @@ function TableContent() {
         </div>
 
         <button
-          onClick={addingMore ? addMoreItems : placeOrder}
+          onClick={submitCart}
           className="tap-btn"
           style={{
             width: "100%",
@@ -745,7 +737,7 @@ function TableContent() {
             cursor: "pointer",
           }}
         >
-          {addingMore ? "Add to Order" : "Place Order"}
+          {activeOrders.length > 0 ? "Add to Order" : "Place Order"}
         </button>
       </div>
     </div>
@@ -881,82 +873,10 @@ function TableContent() {
     );
   }
 
-  // ---------- Bill screen ----------
-  if (order && (order.status === "billed" || order.status === "bill_requested")) {
-    return (
-      <div style={{ minHeight: "100vh", background: "#f8f6f3", padding: 24, fontFamily: "sans-serif" }}>
-        <div style={{ maxWidth: 480, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-            {profile?.logoUrl && (
-              <img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }} />
-            )}
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 18 }}>{profile?.name || "Table Order"}</div>
-              <div style={{ fontSize: 13, color: "#888" }}>Table {order.table}</div>
-            </div>
-          </div>
-
-          {order.status === "bill_requested" && (
-            <div style={{ background: "linear-gradient(135deg, #fff5e0 0%, #fef3c7 100%)", borderRadius: 20, padding: 32, textAlign: "center", marginBottom: 20, border: "1px solid #fde68a" }}>
-              <div style={{ fontSize: 48, marginBottom: 12 }}>🧾</div>
-              <h3 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Bill Requested</h3>
-              <p style={{ color: "#92400e", fontSize: 14 }}>The front desk is preparing your bill now.</p>
-            </div>
-          )}
-
-          {order.status === "billed" && (
-            <div style={{ background: "#fff", borderRadius: 20, padding: 0, overflow: "hidden", boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
-              <div style={{ padding: "24px 24px 16px", borderBottom: "2px dashed #eee" }}>
-                <div style={{ textAlign: "center", marginBottom: 16 }}>
-                  <div style={{ fontSize: 13, color: "#888", textTransform: "uppercase", letterSpacing: 1 }}>Receipt</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, marginTop: 4 }}>{profile?.name || "Table Order"}</div>
-                  <div style={{ fontSize: 12, color: "#888" }}>Table {order.table}</div>
-                </div>
-
-                {order.items.map((it, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontSize: 15, borderBottom: i < order.items.length - 1 ? "1px dotted #eee" : "none" }}>
-                    <span>{it.name} <span style={{ color: "#888" }}>×{it.qty}</span></span>
-                    <span style={{ fontWeight: 600 }}>₹{it.price * it.qty}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div style={{ padding: 20, background: "#f8f6f3" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6 }}>
-                  <span style={{ color: "#888" }}>Subtotal</span>
-                  <span>₹{order.billSubtotal}</span>
-                </div>
-                {order.billTaxAmount > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6, color: "#888" }}>
-                    <span>Tax ({order.billTaxPercent}%)</span>
-                    <span>₹{order.billTaxAmount}</span>
-                  </div>
-                )}
-                {order.billServiceAmount > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6, color: "#888" }}>
-                    <span>Service ({order.billServicePercent}%)</span>
-                    <span>₹{order.billServiceAmount}</span>
-                  </div>
-                )}
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 22, fontWeight: 800, marginTop: 10, paddingTop: 10, borderTop: "2px solid #1a1a2e" }}>
-                  <span>Total</span>
-                  <span>₹{order.billTotal}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div style={{ textAlign: "center", marginTop: 24, fontSize: 13, color: "#888" }}>
-            Awaiting payment — pay at the counter or with staff.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ---------- Status screen ----------
-  if (order && !addingMore) {
-    const countdown = getCountdown(order);
+  // ---------- Unified Status + Bill screen ----------
+  if (activeOrders.length > 0 && !addingMore) {
+    const allServed = activeOrders.every((o) => o.status === "served");
+    const anyBillRequested = activeOrders.some((o) => o.status === "bill_requested");
 
     return (
       <div style={{ minHeight: "100vh", background: "#f8f6f3", padding: 24, fontFamily: "sans-serif", paddingBottom: 100 }}>
@@ -964,114 +884,63 @@ function TableContent() {
         {successOverlay && <SuccessOverlay message={successOverlay} />}
         <div style={{ maxWidth: 480, margin: "0 auto" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-            {profile?.logoUrl && (
-              <img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }} />
-            )}
+            {profile?.logoUrl && <img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }} />}
             <div>
               <div style={{ fontWeight: 700, fontSize: 18 }}>{profile?.name || "Table Order"}</div>
-              <div style={{ fontSize: 13, color: "#888" }}>Table {order.table}</div>
+              <div style={{ fontSize: 13, color: "#888" }}>Table {tableNo}</div>
             </div>
           </div>
 
-          <div style={{ background: "#1C1B1A", color: "#fff", borderRadius: 20, padding: 32, textAlign: "center", marginBottom: 24 }}>
-            <div style={{ fontSize: 22, fontWeight: 600 }}>{statusWords[order.status]}</div>
-            {order.status === "preparing" && countdown && (
-              <div style={{ fontSize: 48, marginTop: 14, fontFamily: "monospace", fontWeight: 700, letterSpacing: 2, color: "#e8a33d" }}>
-                {countdown}
-              </div>
-            )}
-          </div>
-
-          <div style={{ background: "#fff", borderRadius: 16, padding: 20, marginBottom: 20, boxShadow: "0 2px 12px rgba(0,0,0,0.04)" }}>
-            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
-              <span>🛍️</span> Your Order
-            </h3>
-            {order.items.map((it, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: i < order.items.length - 1 ? "1px solid #eee" : "none" }}>
-                <div>
-                  <div style={{ fontWeight: 500 }}>{it.name}</div>
-                  <div style={{ fontSize: 13, color: "#888" }}>₹{it.price} each</div>
+          {activeOrders.map((o) => {
+            const countdown = getCountdown(o);
+            if (o.status === "billed") {
+              return (
+                <div key={o.id} style={{ background: "#fff", borderRadius: 20, overflow: "hidden", boxShadow: "0 4px 20px rgba(0,0,0,0.06)", marginBottom: 16 }}>
+                  <div style={{ padding: "20px 24px", borderBottom: "2px dashed #eee" }}>
+                    <div style={{ fontSize: 12, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Receipt</div>
+                    {o.items.map((it, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 14 }}>
+                        <span>{it.name} ×{it.qty}</span><span>₹{it.price * it.qty}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ padding: 16, background: "#f8f6f3" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800 }}>
+                      <span>Total</span><span>₹{o.billTotal}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: "#888", marginTop: 6 }}>Awaiting payment — pay at the counter.</div>
+                  </div>
                 </div>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>×{it.qty}</div>
+              );
+            }
+            return (
+              <div key={o.id} style={{ background: "#fff", borderRadius: 16, padding: 20, marginBottom: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.04)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>Order · {new Date(o.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "#e8a33d" }}>{statusWords[o.status] || o.status}</span>
+                </div>
+                {countdown && <div style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, color: "#e8a33d", marginBottom: 10 }}>{countdown}</div>}
+                {o.items.map((it, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 14, borderTop: i > 0 ? "1px solid #f4f4f4" : "none" }}>
+                    <span>{it.name}</span><span style={{ fontWeight: 700 }}>×{it.qty}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, paddingTop: 14, borderTop: "2px solid #eee", fontWeight: 700, fontSize: 16 }}>
-              <span>Total items</span>
-              <span>{order.items.reduce((s, i) => s + i.qty, 0)}</span>
-            </div>
-          </div>
+            );
+          })}
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <button
-              onClick={() => { playTone(560, 70); setAddingMore(true); }}
-              className="tap-btn"
-              style={{
-                width: "100%",
-                padding: 16,
-                fontSize: 15,
-                fontWeight: 600,
-                borderRadius: 14,
-                border: "2px solid #1a1a2e",
-                background: "#fff",
-                color: "#1a1a2e",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-              }}
-            >
-              <span>➕</span> Add more items
+            <button onClick={() => { playTone(560, 70); setAddingMore(true); setScreen("menu"); }} className="tap-btn"
+              style={{ width: "100%", padding: 16, fontSize: 15, fontWeight: 600, borderRadius: 14, border: "2px solid #1a1a2e", background: "#fff", color: "#1a1a2e", cursor: "pointer" }}>
+              ➕ Add more items
             </button>
-
-            {order.status === "served" && (
-              <button
-                onClick={() => { playTone(700, 90, "triangle"); requestBill(); }}
-                className="tap-btn"
-                style={{
-                  width: "100%",
-                  padding: 16,
-                  fontSize: 16,
-                  fontWeight: 700,
-                  borderRadius: 14,
-                  border: "none",
-                  background: "#e8a33d",
-                  color: "#1a1a2e",
-                  cursor: "pointer",
-                }}
-              >
+            {allServed && !anyBillRequested && (
+              <button onClick={() => { playTone(700, 90, "triangle"); requestBill(); }} className="tap-btn"
+                style={{ width: "100%", padding: 16, fontSize: 16, fontWeight: 700, borderRadius: 14, border: "none", background: "#e8a33d", color: "#1a1a2e", cursor: "pointer" }}>
                 🧾 Request Bill
               </button>
             )}
           </div>
-        </div>
-
-        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
-          <button
-            onClick={() => { playTone(560, 70); setAddingMore(true); }}
-            className="tap-btn"
-            style={{
-              width: "100%",
-              maxWidth: 480,
-              margin: "0 auto",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              padding: 14,
-              borderRadius: 50,
-              border: "none",
-              background: "#1a1a2e",
-              color: "#fff",
-              fontSize: 15,
-              fontWeight: 600,
-              cursor: "pointer",
-              boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
-            }}
-          >
-            <span>🛒</span>
-            {count > 0 ? `${count} items · ₹${total}` : "Browse Menu"}
-          </button>
         </div>
       </div>
     );

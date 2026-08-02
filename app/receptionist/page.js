@@ -21,6 +21,7 @@ import {
   getDoc,
   serverTimestamp,
   where,
+  writeBatch,
 } from "firebase/firestore";
 
 const DEFAULT_CATEGORIES = ["Starters", "Mains", "Breads & Rice", "Continental", "Beverages", "Desserts"];
@@ -586,6 +587,24 @@ function ReceptionPage() {
     await deleteDoc(doc(db, "restaurants", restaurantId, "tables", id));
   }
 
+  // === FREE TABLE FEATURE ===
+  async function freeTable(tableNumber) {
+    const activeForTable = orders.filter(
+      (o) => o.table === tableNumber && !["paid", "cancelled", "declined"].includes(o.status)
+    );
+    if (activeForTable.length === 0) {
+      alert(`Table ${tableNumber} has no active orders.`);
+      return;
+    }
+    if (!confirm(`Free Table ${tableNumber}? This will cancel ${activeForTable.length} active order(s).`)) return;
+
+    const batch = writeBatch(db);
+    activeForTable.forEach((o) => {
+      batch.update(doc(db, "restaurants", restaurantId, "orders", o.id), { status: "cancelled" });
+    });
+    await batch.commit();
+  }
+
   function qrUrlFor(tableNumber) {
     const link = `${siteUrl}/table?table=${tableNumber}&restaurant=${restaurantId}`;
     return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(link)}`;
@@ -1112,25 +1131,37 @@ function ReceptionPage() {
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 18 }}>
-          {tables.map((t) => (
-            <div key={t.id} className="card" style={{ borderRadius: 18, overflow: "hidden" }}>
-              <div style={{ background: "#1a1a2e", color: "#fff", padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontWeight: 800, fontSize: 15 }}>Table {t.number}</span>
-                <span style={{ fontSize: 11, background: "rgba(255,255,255,0.15)", padding: "3px 9px", borderRadius: 100, fontWeight: 700 }}>🟢 ACTIVE</span>
-              </div>
-              <div style={{ padding: 20, textAlign: "center" }}>
-                {siteUrl && (
-                  <div style={{ background: "#fff", padding: 12, borderRadius: 14, display: "inline-block", boxShadow: "0 2px 10px rgba(0,0,0,0.06)" }}>
-                                        <img src={qrUrlFor(t.number)} alt={`QR table ${t.number}`} style={{ width: 140, height: 140, display: "block" }} />
+          {tables.map((t) => {
+              const activeCount = orders.filter(
+                (o) => o.table === t.number && !["paid", "cancelled", "declined"].includes(o.status)
+              ).length;
+              return (
+                <div key={t.id} className="card" style={{ borderRadius: 18, overflow: "hidden" }}>
+                  <div style={{ background: "#1a1a2e", color: "#fff", padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontWeight: 800, fontSize: 15 }}>Table {t.number}</span>
+                    <span style={{ fontSize: 11, background: activeCount > 0 ? "rgba(34,197,94,0.25)" : "rgba(255,255,255,0.15)", padding: "3px 9px", borderRadius: 100, fontWeight: 700 }}>
+                      {activeCount > 0 ? `🟢 ${activeCount} ACTIVE` : "⚪ FREE"}
+                    </span>
                   </div>
-                )}
-                <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                  <button className="btn btn-sm btn-ghost" onClick={() => printQr(t.number)} style={{ flex: 1 }}>🖨 Print</button>
-                  <button className="btn btn-sm btn-ghost" onClick={() => deleteTable(t.id)} style={{ flex: 1, color: "var(--danger, #dc2626)" }}>Delete</button>
+                  <div style={{ padding: 20, textAlign: "center" }}>
+                    {siteUrl && (
+                      <div style={{ background: "#fff", padding: 12, borderRadius: 14, display: "inline-block", boxShadow: "0 2px 10px rgba(0,0,0,0.06)" }}>
+                        <img src={qrUrlFor(t.number)} alt={`QR table ${t.number}`} style={{ width: 140, height: 140, display: "block" }} />
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                      <button className="btn btn-sm btn-ghost" onClick={() => printQr(t.number)} style={{ flex: 1 }}>🖨 Print</button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => deleteTable(t.id)} style={{ flex: 1, color: "var(--danger, #dc2626)" }}>Delete</button>
+                    </div>
+                    {activeCount > 0 && (
+                      <button onClick={() => freeTable(t.number)} className="btn btn-sm" style={{ width: "100%", marginTop: 8, background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca" }}>
+                        🔓 Free Table ({activeCount} active order{activeCount > 1 ? "s" : ""})
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </div>
-          ))}
+              );
+            })}
         </div>
       )}
     </div>
