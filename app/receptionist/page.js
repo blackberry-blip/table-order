@@ -590,7 +590,7 @@ function ReceptionPage() {
   // === FREE TABLE FEATURE ===
   async function freeTable(tableNumber) {
     const activeForTable = orders.filter(
-      (o) => o.table === tableNumber && !["paid", "cancelled", "declined"].includes(o.status)
+      (o) => o.table === tableNumber && !["paid", "cancelled", "declined", "merged"].includes(o.status)
     );
     if (activeForTable.length === 0) {
       alert(`Table ${tableNumber} has no active orders.`);
@@ -1133,7 +1133,7 @@ function ReceptionPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 18 }}>
           {tables.map((t) => {
               const activeCount = orders.filter(
-                (o) => o.table === t.number && !["paid", "cancelled", "declined"].includes(o.status)
+                (o) => o.table === t.number && !["paid", "cancelled", "declined", "merged"].includes(o.status)
               ).length;
               return (
                 <div key={t.id} className="card" style={{ borderRadius: 18, overflow: "hidden" }}>
