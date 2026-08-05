@@ -1,18 +1,15 @@
 "use client";
+// REPLACES your existing app/kitchen/page.js entirely.
+// Changes vs your original:
+// 1. VIP orders sort to the top of each column (confirmed/preparing/ready).
+// 2. Each item row shows spice level + special-request notes if present.
 
 import { useEffect, useState, useRef } from "react";
 import { db } from "@/lib/firebase";
 import { AuthGuard } from "@/lib/auth-guard";
 import { useAuth } from "@/lib/auth-context";
 import { requestNotificationPermission, showPopupNotification } from "@/lib/notifications";
-import {
-  collection,
-  onSnapshot,
-  query,
-  orderBy,
-  doc,
-  updateDoc,
-} from "firebase/firestore";
+import { collection, onSnapshot, query, orderBy, doc, updateDoc } from "firebase/firestore";
 
 export default function KitchenPageWrapper() {
   return (
@@ -49,32 +46,97 @@ function playKitchenAlert() {
 
 function OrderBanner({ table, count, onDismiss }) {
   return (
-    <div
-      onClick={onDismiss}
-      style={{
-        position: "fixed",
-        top: 14,
-        left: "50%",
-        transform: "translateX(-50%)",
-        zIndex: 300,
-        cursor: "pointer",
-        background: "linear-gradient(135deg, #f59e0b, #ea580c)",
-        color: "#fff",
-        padding: "16px 22px",
-        borderRadius: 18,
-        boxShadow: "0 14px 40px rgba(234,88,12,0.4)",
-        display: "flex",
-        alignItems: "center",
-        gap: 14,
-        animation: "bannerDrop 0.45s cubic-bezier(0.22,1,0.36,1)",
-        maxWidth: "92vw",
-      }}
-    >
+    <div onClick={onDismiss} style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 300, cursor: "pointer", background: "linear-gradient(135deg, #f59e0b, #ea580c)", color: "#fff", padding: "16px 22px", borderRadius: 18, boxShadow: "0 14px 40px rgba(234,88,12,0.4)", display: "flex", alignItems: "center", gap: 14, animation: "bannerDrop 0.45s cubic-bezier(0.22,1,0.36,1)", maxWidth: "92vw" }}>
       <div style={{ fontSize: 30, animation: "bannerRing 0.6s ease 0.3s 2" }}>🔔</div>
       <div>
         <div style={{ fontWeight: 800, fontSize: 16 }}>New Order — Table {table}</div>
         <div style={{ fontSize: 12.5, opacity: 0.9 }}>{count} item{count > 1 ? "s" : ""} just came in · tap to dismiss</div>
       </div>
+    </div>
+  );
+}
+
+// Sort VIP orders to the front, otherwise keep arrival order (list is already
+// createdAt-ascending from the Firestore query, so this is a stable sort).
+function sortByVip(list) {
+  return [...list].sort((a, b) => (b.isVIP ? 1 : 0) - (a.isVIP ? 1 : 0));
+}
+
+function getCountdown(o) {
+  if (!o.etaMinutes || !o.preparingAt) return null;
+  const totalSeconds = o.etaMinutes * 60;
+  const elapsed = Math.floor((Date.now() - o.preparingAt) / 1000);
+  const remaining = totalSeconds - elapsed;
+  if (remaining <= 0) return "Overdue!";
+  const m = Math.floor(remaining / 60);
+  const s = remaining % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+function getElapsed(o) {
+  const elapsed = Math.floor((Date.now() - o.createdAt) / 1000);
+  const m = Math.floor(elapsed / 60);
+  const s = elapsed % 60;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
+// Module-scope on purpose — see the note in receptionist/page.js above
+// StatCard/OrderCard/MenuItemCard for why. Here it matters even more: this
+// page re-renders every second (the currentTime clock), so a component
+// defined *inside* KitchenPage would remount every ticket card once a
+// second, restarting animations and dropping any focus/scroll state.
+function TicketCard({ order, type, isMobile, menuImageMap, children }) {
+  const countdown = type === "preparing" ? getCountdown(order) : null;
+  const isOverdue = countdown === "Overdue!";
+  let borderColor = type === "confirmed" ? "#f59e0b" : type === "preparing" ? (isOverdue ? "#ef4444" : "#3b82f6") : "#22c55e";
+  if (order.isVIP) borderColor = "#eab308";
+
+  return (
+    <div className="card" style={{ padding: isMobile ? 16 : 20, marginBottom: isMobile ? 14 : 16, borderLeft: `4px solid ${borderColor}`, transition: "all 0.2s ease", animation: "cardIn 0.3s ease", position: "relative" }}>
+      {order.isVIP && (
+        <div style={{ position: "absolute", top: -8, right: 14, background: "#eab308", color: "#1a1a2e", fontSize: 10.5, fontWeight: 800, padding: "3px 10px", borderRadius: 100, letterSpacing: 0.3 }}>★ VIP</div>
+      )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: isMobile ? 12 : 14 }}>
+        <div>
+          <div style={{ fontSize: isMobile ? 24 : 28, fontWeight: 800, color: "var(--primary)" }}>Table {order.table}</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
+            {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {getElapsed(order)} ago
+          </div>
+        </div>
+        {type === "preparing" && countdown && (
+          <div style={{ fontFamily: "monospace", fontSize: isMobile ? 20 : 24, fontWeight: 700, color: isOverdue ? "#ef4444" : "#3b82f6", background: isOverdue ? "#fee2e2" : "#dbeafe", padding: "6px 14px", borderRadius: 10, animation: isOverdue ? "pulseRed 1s ease infinite" : "none" }}>
+            {countdown}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: isMobile ? 14 : 16 }}>
+        {order.items.map((it, i) => {
+          const img = menuImageMap[it.name];
+          return (
+            <div key={i} style={{ padding: isMobile ? "8px 10px" : "10px 14px", background: "var(--surface-2)", borderRadius: 10, fontSize: isMobile ? 14 : 15 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                  {img ? (
+                    <img src={img} alt="" style={{ width: isMobile ? 30 : 38, height: isMobile ? 30 : 38, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: isMobile ? 30 : 38, height: isMobile ? 30 : 38, borderRadius: 8, background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>🍽️</div>
+                  )}
+                  <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                </div>
+                <span style={{ background: "var(--primary)", color: "#fff", padding: "2px 10px", borderRadius: 100, fontSize: 13, fontWeight: 700, flexShrink: 0, marginLeft: 8 }}>×{it.qty}</span>
+              </div>
+              {(it.spiceLevel || it.notes) && (
+                <div style={{ marginTop: 6, paddingLeft: isMobile ? 40 : 48, display: "flex", flexDirection: "column", gap: 2 }}>
+                  {it.spiceLevel && <span style={{ fontSize: 11.5, color: "#c2410c", fontWeight: 700 }}>🌶 {it.spiceLevel}</span>}
+                  {it.notes && <span style={{ fontSize: 11.5, color: "#666", fontStyle: "italic" }}>"{it.notes}"</span>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {children}
     </div>
   );
 }
@@ -94,18 +156,14 @@ function KitchenPage() {
   useEffect(() => {
     if (!restaurantId) return;
     const q = query(collection(db, "restaurants", restaurantId, "orders"), orderBy("createdAt", "asc"));
-    const unsub = onSnapshot(q, (snap) => {
-      setOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
+    const unsub = onSnapshot(q, (snap) => setOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
     return () => unsub();
   }, [restaurantId]);
 
   useEffect(() => {
     if (!restaurantId) return;
     const q = query(collection(db, "restaurants", restaurantId, "menuItems"));
-    const unsub = onSnapshot(q, (snap) => {
-      setMenuItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
+    const unsub = onSnapshot(q, (snap) => setMenuItems(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
     return () => unsub();
   }, [restaurantId]);
 
@@ -121,15 +179,12 @@ function KitchenPage() {
     return () => window.removeEventListener("resize", check);
   }, []);
 
-  useEffect(() => {
-    requestNotificationPermission();
-  }, []);
+  useEffect(() => { requestNotificationPermission(); }, []);
 
-  const confirmed = orders.filter((o) => o.status === "confirmed");
-  const preparing = orders.filter((o) => o.status === "preparing");
-  const ready = orders.filter((o) => o.status === "ready");
+  const confirmed = sortByVip(orders.filter((o) => o.status === "confirmed"));
+  const preparing = sortByVip(orders.filter((o) => o.status === "preparing"));
+  const ready = sortByVip(orders.filter((o) => o.status === "ready"));
 
-  // Detect newly confirmed orders arriving from reception
   useEffect(() => {
     const currentIds = new Set(confirmed.map((o) => o.id));
     if (prevConfirmedIds.current !== null) {
@@ -139,10 +194,7 @@ function KitchenPage() {
         const itemCount = latest.items.reduce((s, it) => s + it.qty, 0);
         playKitchenAlert();
         setBanner({ table: latest.table, count: itemCount });
-        showPopupNotification("🔔 New Order!", `Table ${latest.table} — ${itemCount} item(s)`, {
-          tag: "kitchen-new-order",
-          renotify: true,
-        });
+        showPopupNotification("🔔 New Order!", `Table ${latest.table} — ${itemCount} item(s)`, { tag: "kitchen-new-order", renotify: true });
         setMobileTab("confirmed");
         setTimeout(() => setBanner(null), 5500);
       }
@@ -152,129 +204,15 @@ function KitchenPage() {
   }, [confirmed.map((o) => o.id).join(",")]);
 
   const menuImageMap = {};
-  menuItems.forEach((m) => {
-    if (m.imageUrl) menuImageMap[m.name] = m.imageUrl;
-  });
+  menuItems.forEach((m) => { if (m.imageUrl) menuImageMap[m.name] = m.imageUrl; });
 
   async function startCooking(id) {
     const mins = parseInt(etaInputs[id]) || 10;
-    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), {
-      status: "preparing",
-      etaMinutes: mins,
-      preparingAt: Date.now(),
-    });
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "preparing", etaMinutes: mins, preparingAt: Date.now() });
   }
-
   async function markReady(id) {
     await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "ready" });
   }
-
-  function getCountdown(o) {
-    if (!o.etaMinutes || !o.preparingAt) return null;
-    const totalSeconds = o.etaMinutes * 60;
-    const elapsed = Math.floor((Date.now() - o.preparingAt) / 1000);
-    const remaining = totalSeconds - elapsed;
-    if (remaining <= 0) return "Overdue!";
-    const m = Math.floor(remaining / 60);
-    const s = remaining % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  }
-
-  function getElapsed(o) {
-    const elapsed = Math.floor((Date.now() - o.createdAt) / 1000);
-    const m = Math.floor(elapsed / 60);
-    const s = elapsed % 60;
-    return `${m}m ${s.toString().padStart(2, "0")}s`;
-  }
-
-  const TicketCard = ({ order, type, children }) => {
-    const countdown = type === "preparing" ? getCountdown(order) : null;
-    const isOverdue = countdown === "Overdue!";
-    const borderColor = type === "confirmed" ? "#f59e0b" : type === "preparing" ? (isOverdue ? "#ef4444" : "#3b82f6") : "#22c55e";
-
-    return (
-      <div
-        className="card"
-        style={{
-          padding: isMobile ? 16 : 20,
-          marginBottom: isMobile ? 14 : 16,
-          borderLeft: `4px solid ${borderColor}`,
-          transition: "all 0.2s ease",
-          animation: "cardIn 0.3s ease",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: isMobile ? 12 : 14 }}>
-          <div>
-            <div style={{ fontSize: isMobile ? 24 : 28, fontWeight: 800, color: "var(--primary)" }}>Table {order.table}</div>
-            <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
-              {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {getElapsed(order)} ago
-            </div>
-          </div>
-          {type === "preparing" && countdown && (
-            <div
-              style={{
-                fontFamily: "monospace",
-                fontSize: isMobile ? 20 : 24,
-                fontWeight: 700,
-                color: isOverdue ? "#ef4444" : "#3b82f6",
-                background: isOverdue ? "#fee2e2" : "#dbeafe",
-                padding: "6px 14px",
-                borderRadius: 10,
-                animation: isOverdue ? "pulseRed 1s ease infinite" : "none",
-              }}
-            >
-              {countdown}
-            </div>
-          )}
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: isMobile ? 14 : 16 }}>
-          {order.items.map((it, i) => {
-            const img = menuImageMap[it.name];
-            return (
-              <div
-                key={i}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: isMobile ? "8px 10px" : "10px 14px",
-                  background: "var(--surface-2)",
-                  borderRadius: 10,
-                  fontSize: isMobile ? 14 : 15,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                  {img ? (
-                    <img src={img} alt="" style={{ width: isMobile ? 30 : 38, height: isMobile ? 30 : 38, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
-                  ) : (
-                    <div style={{ width: isMobile ? 30 : 38, height: isMobile ? 30 : 38, borderRadius: 8, background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>🍽️</div>
-                  )}
-                  <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
-                </div>
-                <span
-                  style={{
-                    background: "var(--primary)",
-                    color: "#fff",
-                    padding: "2px 10px",
-                    borderRadius: 100,
-                    fontSize: 13,
-                    fontWeight: 700,
-                    flexShrink: 0,
-                    marginLeft: 8,
-                  }}
-                >
-                  ×{it.qty}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-
-        {children}
-      </div>
-    );
-  };
 
   const columns = [
     { key: "confirmed", label: "Needs ETA", icon: "⏳", color: "#f59e0b", bg: "#fef3c7", fg: "#92400e", list: confirmed, empty: { icon: "☕", msg: "Nothing waiting — time for a break!" } },
@@ -286,44 +224,17 @@ function KitchenPage() {
     if (type === "confirmed") {
       return (
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: isMobile ? "wrap" : "nowrap" }}>
-          <input
-            type="number"
-            placeholder="10"
-            defaultValue={10}
-            onChange={(e) => setEtaInputs((prev) => ({ ...prev, [order.id]: e.target.value }))}
-            style={{
-              width: isMobile ? 64 : 70,
-              padding: isMobile ? "12px 10px" : "10px 12px",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              fontSize: 15,
-              fontWeight: 600,
-              textAlign: "center",
-            }}
-          />
+          <input type="number" placeholder="10" defaultValue={10} onChange={(e) => setEtaInputs((prev) => ({ ...prev, [order.id]: e.target.value }))}
+            style={{ width: isMobile ? 64 : 70, padding: isMobile ? "12px 10px" : "10px 12px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 15, fontWeight: 600, textAlign: "center" }} />
           <span style={{ color: "var(--text-secondary)", fontSize: 14 }}>min</span>
-          <button
-            className="btn btn-primary"
-            onClick={() => startCooking(order.id)}
-            style={{ marginLeft: isMobile ? 0 : "auto", flex: isMobile ? "1 1 auto" : "none", padding: isMobile ? "14px 20px" : "12px 20px", fontSize: isMobile ? 15 : 14 }}
-          >
-            ▶ Start Cooking
-          </button>
+          <button className="btn btn-primary" onClick={() => startCooking(order.id)} style={{ marginLeft: isMobile ? 0 : "auto", flex: isMobile ? "1 1 auto" : "none", padding: isMobile ? "14px 20px" : "12px 20px", fontSize: isMobile ? 15 : 14 }}>▶ Start Cooking</button>
         </div>
       );
     }
     if (type === "preparing") {
-      return (
-        <button className="btn btn-success" onClick={() => markReady(order.id)} style={{ width: "100%", padding: isMobile ? 16 : 14, fontSize: isMobile ? 16 : 15 }}>
-          ✓ Mark Ready for Pickup
-        </button>
-      );
+      return <button className="btn btn-success" onClick={() => markReady(order.id)} style={{ width: "100%", padding: isMobile ? 16 : 14, fontSize: isMobile ? 16 : 15 }}>✓ Mark Ready for Pickup</button>;
     }
-    return (
-      <div style={{ background: "#dcfce7", color: "#166534", padding: "12px 16px", borderRadius: 10, textAlign: "center", fontWeight: 600, fontSize: 14 }}>
-        Waiting for server pickup
-      </div>
-    );
+    return <div style={{ background: "#dcfce7", color: "#166534", padding: "12px 16px", borderRadius: 10, textAlign: "center", fontWeight: 600, fontSize: 14 }}>Waiting for server pickup</div>;
   }
 
   return (
@@ -338,35 +249,10 @@ function KitchenPage() {
 
       {banner && <OrderBanner table={banner.table} count={banner.count} onDismiss={() => setBanner(null)} />}
 
-      {/* Header */}
-      <div
-        style={{
-          background: "var(--primary)",
-          color: "#fff",
-          padding: isMobile ? "14px 16px" : "20px 24px",
-          position: "sticky",
-          top: 0,
-          zIndex: 10,
-          boxShadow: "0 2px 20px rgba(0,0,0,0.1)",
-        }}
-      >
+      <div style={{ background: "var(--primary)", color: "#fff", padding: isMobile ? "14px 16px" : "20px 24px", position: "sticky", top: 0, zIndex: 10, boxShadow: "0 2px 20px rgba(0,0,0,0.1)" }}>
         <div style={{ maxWidth: 1400, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 10 : 14 }}>
-            <div
-              style={{
-                width: isMobile ? 36 : 44,
-                height: isMobile ? 36 : 44,
-                borderRadius: 12,
-                background: "rgba(232,163,61,0.2)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: isMobile ? 18 : 24,
-                flexShrink: 0,
-              }}
-            >
-              👨‍🍳
-            </div>
+            <div style={{ width: isMobile ? 36 : 44, height: isMobile ? 36 : 44, borderRadius: 12, background: "rgba(232,163,61,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: isMobile ? 18 : 24, flexShrink: 0 }}>👨‍🍳</div>
             <div>
               <h1 style={{ fontSize: isMobile ? 16 : 22, fontWeight: 800, margin: 0 }}>Kitchen Display</h1>
               {!isMobile && <div style={{ fontSize: 13, opacity: 0.7 }}>{currentTime.toLocaleTimeString()}</div>}
@@ -376,35 +262,12 @@ function KitchenPage() {
           <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 10 : 24 }}>
             {!isMobile && (
               <div style={{ display: "flex", gap: 16, fontSize: 14 }}>
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 22, fontWeight: 800 }}>{confirmed.length}</div>
-                  <div style={{ opacity: 0.7 }}>Waiting</div>
-                </div>
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 22, fontWeight: 800 }}>{preparing.length}</div>
-                  <div style={{ opacity: 0.7 }}>Cooking</div>
-                </div>
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 22, fontWeight: 800 }}>{ready.length}</div>
-                  <div style={{ opacity: 0.7 }}>Ready</div>
-                </div>
+                <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{confirmed.length}</div><div style={{ opacity: 0.7 }}>Waiting</div></div>
+                <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{preparing.length}</div><div style={{ opacity: 0.7 }}>Cooking</div></div>
+                <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{ready.length}</div><div style={{ opacity: 0.7 }}>Ready</div></div>
               </div>
             )}
-
-            <button
-              onClick={logout}
-              style={{
-                background: "rgba(0,0,0,0.2)",
-                border: "1px solid rgba(255,255,255,0.2)",
-                color: "#fff",
-                padding: isMobile ? "8px 12px" : "8px 16px",
-                borderRadius: 10,
-                cursor: "pointer",
-                fontSize: isMobile ? 12 : 13,
-                fontWeight: 600,
-                whiteSpace: "nowrap",
-              }}
-            >
+            <button onClick={logout} style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", padding: isMobile ? "8px 12px" : "8px 16px", borderRadius: 10, cursor: "pointer", fontSize: isMobile ? 12 : 13, fontWeight: 600, whiteSpace: "nowrap" }}>
               🚪{!isMobile && ` Logout ${role ? `(${role})` : ""}`}
             </button>
           </div>
@@ -413,73 +276,23 @@ function KitchenPage() {
 
       {isMobile ? (
         <>
-          {/* Mobile segmented tabs */}
-          <div
-            style={{
-              position: "sticky",
-              top: 64,
-              zIndex: 9,
-              background: "var(--bg)",
-              padding: "10px 12px",
-              display: "flex",
-              gap: 8,
-              borderBottom: "1px solid var(--border)",
-            }}
-          >
+          <div style={{ position: "sticky", top: 64, zIndex: 9, background: "var(--bg)", padding: "10px 12px", display: "flex", gap: 8, borderBottom: "1px solid var(--border)" }}>
             {columns.map((col) => {
               const isActive = mobileTab === col.key;
               return (
-                <button
-                  key={col.key}
-                  onClick={() => setMobileTab(col.key)}
-                  style={{
-                    flex: 1,
-                    padding: "12px 6px",
-                    borderRadius: 12,
-                    border: "none",
-                    background: isActive ? col.color : "var(--surface-2)",
-                    color: isActive ? "#fff" : "var(--text-secondary)",
-                    fontSize: 12.5,
-                    fontWeight: 800,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 3,
-                    cursor: "pointer",
-                    transition: "all 0.15s ease",
-                  }}
-                >
+                <button key={col.key} onClick={() => setMobileTab(col.key)} style={{ flex: 1, padding: "12px 6px", borderRadius: 12, border: "none", background: isActive ? col.color : "var(--surface-2)", color: isActive ? "#fff" : "var(--text-secondary)", fontSize: 12.5, fontWeight: 800, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, cursor: "pointer", transition: "all 0.15s ease" }}>
                   <span style={{ fontSize: 18 }}>{col.icon}</span>
                   <span>{col.label}</span>
-                  <span
-                    key={col.list.length}
-                    style={{
-                      background: isActive ? "rgba(255,255,255,0.25)" : col.bg,
-                      color: isActive ? "#fff" : col.fg,
-                      padding: "1px 9px",
-                      borderRadius: 100,
-                      fontSize: 12,
-                      fontWeight: 800,
-                      animation: "countBump 0.4s ease",
-                    }}
-                  >
-                    {col.list.length}
-                  </span>
+                  <span key={col.list.length} style={{ background: isActive ? "rgba(255,255,255,0.25)" : col.bg, color: isActive ? "#fff" : col.fg, padding: "1px 9px", borderRadius: 100, fontSize: 12, fontWeight: 800, animation: "countBump 0.4s ease" }}>{col.list.length}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* Mobile ticket list */}
           <div style={{ padding: "16px 14px 40px" }}>
-            {columns
-              .find((c) => c.key === mobileTab)
-              .list.map((o) => (
-                <TicketCard key={o.id} order={o} type={mobileTab}>
-                  {renderTicketActions(mobileTab, o)}
-                </TicketCard>
-              ))}
-
+            {columns.find((c) => c.key === mobileTab).list.map((o) => (
+              <TicketCard key={o.id} order={o} type={mobileTab} isMobile={isMobile} menuImageMap={menuImageMap}>{renderTicketActions(mobileTab, o)}</TicketCard>
+            ))}
             {columns.find((c) => c.key === mobileTab).list.length === 0 && (
               <div className="card" style={{ padding: 44, textAlign: "center", color: "var(--text-secondary)" }}>
                 <div style={{ fontSize: 42, marginBottom: 10 }}>{columns.find((c) => c.key === mobileTab).empty.icon}</div>
@@ -489,59 +302,21 @@ function KitchenPage() {
           </div>
         </>
       ) : (
-        /* Desktop 3-column grid */
-        <div
-          style={{
-            maxWidth: 1400,
-            margin: "0 auto",
-            padding: 24,
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
-            gap: 24,
-          }}
-        >
+        <div style={{ maxWidth: 1400, margin: "0 auto", padding: 24, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 24 }}>
           {columns.map((col) => (
             <div key={col.key}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  marginBottom: 16,
-                  paddingBottom: 12,
-                  borderBottom: `2px solid ${col.color}`,
-                }}
-              >
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, paddingBottom: 12, borderBottom: `2px solid ${col.color}` }}>
                 <span style={{ fontSize: 20 }}>{col.icon}</span>
                 <h2 style={{ fontSize: 16, fontWeight: 700 }}>{col.label}</h2>
-                <span
-                  key={col.list.length}
-                  style={{
-                    marginLeft: "auto",
-                    background: col.bg,
-                    color: col.fg,
-                    padding: "2px 10px",
-                    borderRadius: 100,
-                    fontSize: 13,
-                    fontWeight: 700,
-                    animation: "countBump 0.4s ease",
-                  }}
-                >
-                  {col.list.length}
-                </span>
+                <span key={col.list.length} style={{ marginLeft: "auto", background: col.bg, color: col.fg, padding: "2px 10px", borderRadius: 100, fontSize: 13, fontWeight: 700, animation: "countBump 0.4s ease" }}>{col.list.length}</span>
               </div>
-
               {col.list.length === 0 && (
                 <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--text-secondary)" }}>
-                  <div style={{ fontSize: 40, marginBottom: 8 }}>{col.empty.icon}</div>
-                  <p>{col.empty.msg}</p>
+                  <div style={{ fontSize: 40, marginBottom: 8 }}>{col.empty.icon}</div><p>{col.empty.msg}</p>
                 </div>
               )}
-
               {col.list.map((o) => (
-                <TicketCard key={o.id} order={o} type={col.key}>
-                  {renderTicketActions(col.key, o)}
-                </TicketCard>
+                <TicketCard key={o.id} order={o} type={col.key} isMobile={isMobile} menuImageMap={menuImageMap}>{renderTicketActions(col.key, o)}</TicketCard>
               ))}
             </div>
           ))}
