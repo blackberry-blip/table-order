@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { auth, db, googleProvider, uploadToCloudinary } from "@/lib/firebase";
 import { signInWithPopup } from "firebase/auth";
@@ -8,8 +8,8 @@ import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useAuth } from "@/lib/auth-context";
 import { HOTEL_STATUS } from "@/lib/plans";
 
-export default function LoginPage() {
-  const [phase, setPhase] = useState("login"); // splash phase removed — starts here now
+function LoginPageInner() {
+  const [phase, setPhase] = useState("login");
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [invitedRestaurantId, setInvitedRestaurantId] = useState(null);
   const [error, setError] = useState("");
@@ -134,12 +134,6 @@ export default function LoginPage() {
     }
   }
 
-  // NOTE: this path is now effectively a fallback. New restaurant owners
-  // should go through /signup (which creates the hotels/{uid} doc with a
-  // real plan). This stays here for any Google account that signs in
-  // fresh without having gone through /signup — it now ALSO creates a
-  // pending hotels/{uid} doc, so they land on /pending, not a free "base"
-  // account that silently gets full access forever.
   async function handleCreateRestaurant() {
     if (!restaurantForm.name.trim()) { setError("Restaurant name is required"); return; }
     setLoading(true);
@@ -310,4 +304,16 @@ export default function LoginPage() {
   }
 
   return null;
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #faf8f5 0%, #f5f3ef 100%)" }}>
+        <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28 }}>🍽️</div>
+      </div>
+    }>
+      <LoginPageInner />
+    </Suspense>
+  );
 }
