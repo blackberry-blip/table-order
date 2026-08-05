@@ -15,6 +15,8 @@
 //  - Sidebar: no emojis, bold text, light-blue active state.
 //  - Plan-gated: features not in the hotel's plan tier are hidden (see
 //    lib/plans.js) — check `features.x` before rendering pro/mid-only UI.
+//  - BULK IMPORT: CSV/JSON paste or upload, preview validation, auto-creates
+//    missing categories, skips duplicates, downloads template.
 
 import { useEffect, useState, useRef } from "react";
 import { db } from "@/lib/firebase";
@@ -75,18 +77,6 @@ const labelStyle = { fontSize: 12, color: "var(--text-secondary, #6b6b7b)", font
 const glassCard = { background: "rgba(255,255,255,0.55)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.5)" };
 
 // === shared components — MUST live at module scope, not inside ReceptionPage ===
-// (Bug fix: these were originally defined *inside* the ReceptionPage function
-// body. Every re-render of ReceptionPage — which happens on every keystroke,
-// since typing updates state — created a brand-new function reference for
-// each of these. React treats a new function reference as a completely
-// different component type, so it unmounted and remounted the whole subtree
-// on every single keystroke, which is why typing in the item description
-// (inside MenuItemCard's edit form) looked like it "wasn't taking input" —
-// the <input> DOM node was being destroyed and recreated after every
-// character, so focus kept dropping. Moving them out here means they're
-// defined once, and only their props change on re-render, so React just
-// updates them in place instead of remounting.)
-
 function StatCard({ label, value, color, sub, onClick }) {
   return (
     <div onClick={onClick} style={{ ...glassCard, padding: 20, display: "flex", alignItems: "center", gap: 16, borderRadius: 18, cursor: onClick ? "pointer" : "default", boxShadow: `0 8px 24px ${color}22` }}>
@@ -300,6 +290,15 @@ function ReceptionPage() {
   const [splitCount, setSplitCount] = useState(2);
   const [showSplash, setShowSplash] = useState(false);
   const [splashLeaving, setSplashLeaving] = useState(false);
+
+  // --- NEW: bulk import state ---
+  const [showAddItem, setShowAddItem] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFormat, setImportFormat] = useState("csv");
+  const [importText, setImportText] = useState("");
+  const [importPreview, setImportPreview] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [autoCreateCategories, setAutoCreateCategories] = useState(true);
 
   const editCategoryFileInputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -543,7 +542,7 @@ function ReceptionPage() {
     await setDoc(doc(db, "restaurants", restaurantId, "info", "promoBanner"), {
       imageUrl: promoForm.imageUrl || "",
       title: promoForm.title || "",
-      linkedItemId: promoForm.linkedItemId || "",
+           linkedItemId: promoForm.linkedItemId || "",
     });
     setPromoSaved(true);
     setTimeout(() => setPromoSaved(false), 2000);
@@ -773,6 +772,175 @@ function ReceptionPage() {
     await deleteDoc(doc(db, "restaurants", restaurantId, "staff", staffId));
   }
 
+  // === BULK IMPORT FUNCTIONS ===
+  function normalizeBool(val) {
+    if (val === undefined || val === null) return false;
+    const s = String(val).toLowerCase().trim();
+    return s === "true" || s === "yes" || s === "1" || s === "y";
+  }
+  function normalizeFoodType(val) {
+    if (!val) return "veg";
+    const s = String(val).toLowerCase().trim();
+    if (s.includes("non")) return "nonveg";
+    return "veg";
+  }
+  function cleanPrice(val) {
+    if (!val) return null;
+    const s = String(val).replace(/[₹,$\s]/g, "");
+    const n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  }
+
+  function parseCSV(text) {
+    const lines = text.trim().split(/\r?\n/).filter((l) => l.trim());
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(",").map((v) => v.trim());
+      const row = {};
+      headers.forEach((h, idx) => { row[h] = values[idx] || ""; });
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function parseImportData(text, format) {
+    let rows = [];
+    try {
+      if (format === "json") {
+        const parsed = JSON.parse(text);
+        rows = Array.isArray(parsed) ? parsed : [parsed];
+      } else {
+        rows = parseCSV(text);
+      }
+    } catch (e) {
+      return { error: "Invalid format. Check your CSV/JSON syntax." };
+    }
+
+    const items = [];
+    const errors = [];
+    rows.forEach((row, idx) => {
+      const name = row.name || row.Name || row.item || row.Item || "";
+      const priceRaw = row.price || row.Price || row.price_inr || "";
+      const category = row.category || row.Category || "";
+      const description = row.description || row.Description || row.desc || "";
+      const foodTypeRaw = row.foodtype || row.foodType || row.food_type || row.type || "veg";
+      const chefSpecialRaw = row.chefspecial || row.chefSpecial || row.chef_special || row.chef || "no";
+      const featuredRaw = row.featured || row.Featured || "no";
+      const imageUrl = row.imageurl || row.imageUrl || row.image_url || row.image || "";
+
+      const price = cleanPrice(priceRaw);
+      if (!name.trim()) { errors.push(`Row ${idx + 1}: Name is required`); return; }
+      if (price === null || price <= 0) { errors.push(`Row ${idx + 1}: Valid price is required`); return; }
+      if (!category.trim()) { errors.push(`Row ${idx + 1}: Category is required`); return; }
+
+      items.push({
+        name: name.trim(),
+        price,
+        category: category.trim(),
+        description: description.trim(),
+        foodType: normalizeFoodType(foodTypeRaw),
+        chefSpecial: normalizeBool(chefSpecialRaw),
+        featured: normalizeBool(featuredRaw),
+        imageUrl: imageUrl.trim(),
+        isCombo: false,
+        available: true,
+      });
+    });
+
+    return { items, errors };
+  }
+
+  function buildImportPreview() {
+    if (!importText.trim()) { setImportPreview(null); return; }
+    const result = parseImportData(importText, importFormat);
+    if (result.error) {
+      setImportPreview({ error: result.error, items: [], categoriesNeeded: [], duplicates: [], valid: false });
+      return;
+    }
+
+    const existingNames = new Set(menuItems.map((m) => m.name.toLowerCase()));
+    const existingCategories = new Set(categories.map((c) => c.name));
+    const categoriesNeeded = [];
+    const duplicates = [];
+
+    result.items.forEach((item) => {
+      if (!existingCategories.has(item.category) && !categoriesNeeded.includes(item.category)) {
+        categoriesNeeded.push(item.category);
+      }
+      if (existingNames.has(item.name.toLowerCase())) {
+        duplicates.push(item.name);
+      }
+    });
+
+    setImportPreview({
+      items: result.items,
+      errors: result.errors,
+      categoriesNeeded,
+      duplicates,
+      valid: result.errors.length === 0,
+    });
+  }
+
+  function downloadTemplate() {
+    const csv = `Name,Price,Category,Description,FoodType,ChefSpecial,Featured,ImageUrl
+Paneer Tikka,320,Starters,Cottage cheese marinated in spices,veg,no,no,
+Butter Chicken,450,Mains,Tender chicken in rich tomato gravy,nonveg,yes,yes,
+Garlic Naan,80,Breads & Rice,Soft naan brushed with garlic butter,veg,no,no,
+Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,yes,`;
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "menu-template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function executeImport() {
+    if (!importPreview || !importPreview.valid || importPreview.items.length === 0) return;
+    if (!restaurantId) return;
+
+    setImporting(true);
+    try {
+      const batch = writeBatch(db);
+      const menuCol = collection(db, "restaurants", restaurantId, "menuItems");
+      const catCol = collection(db, "restaurants", restaurantId, "categories");
+
+      // Create missing categories first
+      const existingCats = new Set(categories.map((c) => c.name));
+      const catsToCreate = importPreview.categoriesNeeded.filter((c) => !existingCats.has(c));
+      const newCatIds = {};
+      for (const catName of catsToCreate) {
+        const ref = doc(catCol);
+        batch.set(ref, { name: catName, imageUrl: "", order: categories.length + catsToCreate.indexOf(catName), createdAt: Date.now() });
+        newCatIds[catName] = ref.id;
+      }
+
+      // Add menu items
+      const existingNames = new Set(menuItems.map((m) => m.name.toLowerCase()));
+      let imported = 0;
+      for (const item of importPreview.items) {
+        if (existingNames.has(item.name.toLowerCase())) continue; // skip duplicates
+        const ref = doc(menuCol);
+        batch.set(ref, { ...item, createdAt: Date.now() });
+        imported++;
+      }
+
+      await batch.commit();
+
+      setImporting(false);
+      setShowImportModal(false);
+      setImportText("");
+      setImportPreview(null);
+      alert(`${imported} item(s) imported successfully!${catsToCreate.length > 0 ? ` ${catsToCreate.length} new categor${catsToCreate.length === 1 ? "y" : "ies"} created.` : ""}`);
+    } catch (err) {
+      setImporting(false);
+      alert("Import failed: " + err.message);
+    }
+  }
+
   // === ANALYTICS SUB-VIEWS ===
   function computeAnalytics(filterKey) {
     const start = filterRangeStart(filterKey);
@@ -781,11 +949,6 @@ function ReceptionPage() {
     const orderCount = inRange.length;
     const avg = orderCount > 0 ? Math.round(totalSales / orderCount) : 0;
 
-    // Note: true "avg table turnover time" needs a billedAt timestamp, which
-    // this schema doesn't store yet. To add it: in generateBill() above, also
-    // write `billedAt: Date.now()`, then turnover = billedAt - createdAt.
-    // For now this view shows order volume / sales / peak hour / top items,
-    // all of which work with the existing fields.
     const hourBuckets = Array(24).fill(0);
     inRange.forEach((o) => { hourBuckets[new Date(o.createdAt).getHours()]++; });
     const peakHour = hourBuckets.indexOf(Math.max(...hourBuckets));
@@ -1037,10 +1200,142 @@ function ReceptionPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
         <h2 style={{ fontSize: 24, fontWeight: 800, margin: 0, fontFamily: "'Fraunces', serif" }}>Menu</h2>
         <div style={{ display: "flex", gap: 8 }}>
-          {features.combos && <button className="btn btn-ghost" onClick={() => { setShowAddCombo((s) => !s); setShowAddCategory(false); }}>{showAddCombo ? "Close" : "+ Add Combo"}</button>}
-          <button className="btn btn-ghost" onClick={() => { setShowAddCategory((s) => !s); setShowAddCombo(false); }}>{showAddCategory ? "Close" : "+ Add Category"}</button>
+          <button className="btn btn-ghost" onClick={() => { setShowAddItem((s) => !s); setShowAddCombo(false); setShowAddCategory(false); setShowImportModal(false); }}>{showAddItem ? "Close" : "+ Add Item"}</button>
+          {features.combos && <button className="btn btn-ghost" onClick={() => { setShowAddCombo((s) => !s); setShowAddItem(false); setShowAddCategory(false); setShowImportModal(false); }}>{showAddCombo ? "Close" : "+ Add Combo"}</button>}
+          <button className="btn btn-ghost" onClick={() => { setShowAddCategory((s) => !s); setShowAddItem(false); setShowAddCombo(false); setShowImportModal(false); }}>{showAddCategory ? "Close" : "+ Add Category"}</button>
+          <button className="btn btn-primary" onClick={() => { setShowImportModal(true); setShowAddItem(false); setShowAddCombo(false); setShowAddCategory(false); }}>↑ Import Menu</button>
         </div>
       </div>
+
+      {/* BULK IMPORT MODAL */}
+      {showImportModal && (
+        <div className="card" style={{ padding: 24, borderRadius: 16, marginBottom: 24, border: "2px dashed #1a1a2e" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>Import Menu</h3>
+            <button onClick={() => { setShowImportModal(false); setImportText(""); setImportPreview(null); }} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 18 }}>✕</button>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <button onClick={() => setImportFormat("csv")} style={{ padding: "6px 14px", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: importFormat === "csv" ? "#1a1a2e" : "#f3efe6", color: importFormat === "csv" ? "#fff" : "#666" }}>CSV</button>
+            <button onClick={() => setImportFormat("json")} style={{ padding: "6px 14px", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: importFormat === "json" ? "#1a1a2e" : "#f3efe6", color: importFormat === "json" ? "#fff" : "#666" }}>JSON</button>
+            <button onClick={downloadTemplate} className="btn btn-sm btn-ghost" style={{ marginLeft: "auto" }}>↓ Download Template</button>
+          </div>
+
+          <p style={{ fontSize: 12.5, color: "#6b6b7b", marginBottom: 12 }}>
+            {importFormat === "csv"
+              ? "Paste CSV text below. Columns: Name, Price, Category, Description, FoodType, ChefSpecial, Featured, ImageUrl"
+              : "Paste JSON array below. Each object needs: name, price, category. Optional: description, foodType, chefSpecial, featured, imageUrl"}
+          </p>
+
+          <textarea
+            value={importText}
+            onChange={(e) => { setImportText(e.target.value); setImportPreview(null); }}
+            placeholder={importFormat === "csv"
+              ? `Name,Price,Category,Description,FoodType,ChefSpecial,Featured,ImageUrl\nPaneer Tikka,320,Starters,Marinated cottage cheese,veg,no,no,`
+              : `[\n  {\n    "name": "Paneer Tikka",\n    "price": 320,\n    "category": "Starters",\n    "description": "Marinated cottage cheese",\n    "foodType": "veg",\n    "chefSpecial": false,\n    "featured": false\n  }\n]`}
+            style={{ width: "100%", minHeight: 160, padding: 14, borderRadius: 10, border: "1px solid #e6e1d6", fontSize: 13, fontFamily: "monospace", resize: "vertical", marginBottom: 12, boxSizing: "border-box" }}
+          />
+
+          <button onClick={buildImportPreview} className="btn btn-primary" style={{ marginBottom: 16 }} disabled={!importText.trim()}>
+            Preview Import
+          </button>
+
+          {/* PREVIEW SECTION */}
+          {importPreview && (
+            <div style={{ marginBottom: 16 }}>
+              {importPreview.error && (
+                <div style={{ background: "#fef2f2", color: "#dc2626", padding: 12, borderRadius: 10, fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+                  {importPreview.error}
+                </div>
+              )}
+
+              {importPreview.errors.length > 0 && (
+                <div style={{ background: "#fffbeb", color: "#92400e", padding: 12, borderRadius: 10, fontSize: 12, marginBottom: 12 }}>
+                  <strong>Validation Issues ({importPreview.errors.length}):</strong>
+                  <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                    {importPreview.errors.map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {importPreview.valid && (
+                <>
+                  <div style={{ display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>
+                      <span style={{ color: "#16a34a" }}>{importPreview.items.length}</span> items ready
+                    </div>
+                    {importPreview.duplicates.length > 0 && (
+                      <div style={{ fontSize: 13, color: "#92400e" }}>
+                        <span style={{ fontWeight: 700 }}>{importPreview.duplicates.length}</span> duplicates will be skipped
+                      </div>
+                    )}
+                    {importPreview.categoriesNeeded.length > 0 && (
+                      <div style={{ fontSize: 13, color: "#3b82f6" }}>
+                        <span style={{ fontWeight: 700 }}>{importPreview.categoriesNeeded.length}</span> new categor{importPreview.categoriesNeeded.length === 1 ? "y" : "ies"} to create
+                      </div>
+                    )}
+                  </div>
+
+                  {importPreview.categoriesNeeded.length > 0 && (
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: 12, padding: 10, background: "#eff6ff", borderRadius: 8 }}>
+                      <input type="checkbox" checked={autoCreateCategories} onChange={(e) => setAutoCreateCategories(e.target.checked)} />
+                      Auto-create missing categories: {importPreview.categoriesNeeded.join(", ")}
+                    </label>
+                  )}
+
+                  {!autoCreateCategories && importPreview.categoriesNeeded.length > 0 && (
+                    <div style={{ background: "#fef2f2", color: "#dc2626", padding: 10, borderRadius: 8, fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
+                      ⚠️ Cannot import without creating these categories first. Either enable auto-create or add them manually.
+                    </div>
+                  )}
+
+                  <div className="card" style={{ padding: 16, borderRadius: 12, marginBottom: 12, maxHeight: 240, overflow: "auto" }}>
+                    <table style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid #e6e1d6", textAlign: "left" }}>
+                          <th style={{ padding: "6px 8px" }}>Name</th>
+                          <th style={{ padding: "6px 8px" }}>Price</th>
+                          <th style={{ padding: "6px 8px" }}>Category</th>
+                          <th style={{ padding: "6px 8px" }}>Type</th>
+                          <th style={{ padding: "6px 8px" }}>Flags</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importPreview.items.slice(0, 10).map((item, i) => (
+                          <tr key={i} style={{ borderBottom: "1px solid #f4f4f4" }}>
+                            <td style={{ padding: "6px 8px" }}>{item.name}</td>
+                            <td style={{ padding: "6px 8px" }}>₹{item.price}</td>
+                            <td style={{ padding: "6px 8px" }}>{item.category}</td>
+                            <td style={{ padding: "6px 8px" }}>
+                              <span style={{ color: item.foodType === "nonveg" ? "#dc2626" : "#16a34a", fontWeight: 600 }}>{item.foodType}</span>
+                            </td>
+                            <td style={{ padding: "6px 8px" }}>
+                              {item.chefSpecial && <span style={{ fontSize: 10, background: "#1a1a2e", color: "#fff", padding: "2px 6px", borderRadius: 4, marginRight: 4 }}>CS</span>}
+                              {item.featured && <span style={{ fontSize: 10, background: "#e8a33d", color: "#fff", padding: "2px 6px", borderRadius: 4 }}>★</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {importPreview.items.length > 10 && (
+                      <p style={{ fontSize: 11, color: "#888", margin: "8px 0 0", textAlign: "center" }}>...and {importPreview.items.length - 10} more</p>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={executeImport}
+                    disabled={importing || (importPreview.categoriesNeeded.length > 0 && !autoCreateCategories)}
+                    className="btn btn-primary"
+                    style={{ width: "100%", opacity: importing || (importPreview.categoriesNeeded.length > 0 && !autoCreateCategories) ? 0.5 : 1 }}
+                  >
+                    {importing ? "Importing..." : `Import ${importPreview.items.length - importPreview.duplicates.length} Items`}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {showAddCombo && (
         <div className="card" style={{ padding: 20, borderRadius: 16, marginBottom: 20, border: "2px dashed #1a1a2e" }}>
@@ -1085,39 +1380,42 @@ function ReceptionPage() {
         </div>
       )}
 
-      <div className="card" style={{ padding: 22, borderRadius: 18, marginBottom: 28 }}>
-        <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>Add New Item</h3>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 4 }}>
-          <div><label style={labelStyle}>Name</label><input placeholder="e.g. Paneer Tikka" value={newItem.name} onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))} style={inputStyle} /></div>
-          <div><label style={labelStyle}>Price (₹)</label><input placeholder="0" type="number" value={newItem.price} onChange={(e) => setNewItem((p) => ({ ...p, price: e.target.value }))} style={inputStyle} /></div>
-          <div>
-            <label style={labelStyle}>Category</label>
-            <select value={newItem.category} onChange={(e) => setNewItem((p) => ({ ...p, category: e.target.value }))} style={inputStyle}>
-              {categories.length === 0 && <option value="">Add a category first</option>}
-              {categories.filter((c) => c.name !== COMBO_CATEGORY).map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-            </select>
+      {/* COLLAPSIBLE ADD NEW ITEM */}
+      {showAddItem && (
+        <div className="card" style={{ padding: 22, borderRadius: 18, marginBottom: 28 }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>Add New Item</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 4 }}>
+            <div><label style={labelStyle}>Name</label><input placeholder="e.g. Paneer Tikka" value={newItem.name} onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))} style={inputStyle} /></div>
+            <div><label style={labelStyle}>Price (₹)</label><input placeholder="0" type="number" value={newItem.price} onChange={(e) => setNewItem((p) => ({ ...p, price: e.target.value }))} style={inputStyle} /></div>
+            <div>
+              <label style={labelStyle}>Category</label>
+              <select value={newItem.category} onChange={(e) => setNewItem((p) => ({ ...p, category: e.target.value }))} style={inputStyle}>
+                {categories.length === 0 && <option value="">Add a category first</option>}
+                {categories.filter((c) => c.name !== COMBO_CATEGORY).map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+            </div>
           </div>
+
+          <label style={labelStyle}>Food Type *</label>
+          <FoodTypeToggle value={newItem.foodType} onChange={(v) => setNewItem((p) => ({ ...p, foodType: v }))} />
+
+          <label style={labelStyle}>Food Photo</label>
+          <input ref={fileInputRef} type="file" accept="image/*" onChange={(e) => handleImageUpload(e.target.files[0], false)} style={{ display: "none" }} />
+          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
+            <button onClick={() => fileInputRef.current?.click()} disabled={uploadingImage} className="btn btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>{uploadingImage ? "Uploading..." : "Choose Photo"}</button>
+            {newItem.imageUrl && !uploadingImage && <img src={newItem.imageUrl} alt="Preview" style={{ width: 52, height: 52, borderRadius: 10, objectFit: "cover" }} />}
+          </div>
+
+          <label style={labelStyle}>Description</label>
+          <input placeholder="Short, appetising description (optional)" value={newItem.description} onChange={(e) => setNewItem((p) => ({ ...p, description: e.target.value }))} style={inputStyle} />
+
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", marginBottom: 14 }}>
+            <input type="checkbox" checked={!!newItem.chefSpecial} onChange={(e) => setNewItem((p) => ({ ...p, chefSpecial: e.target.checked }))} /> Mark as Chef's Special
+          </label>
+
+          <button className="btn btn-primary" onClick={addMenuItem}>+ Add Item to Menu</button>
         </div>
-
-        <label style={labelStyle}>Food Type *</label>
-        <FoodTypeToggle value={newItem.foodType} onChange={(v) => setNewItem((p) => ({ ...p, foodType: v }))} />
-
-        <label style={labelStyle}>Food Photo</label>
-        <input ref={fileInputRef} type="file" accept="image/*" onChange={(e) => handleImageUpload(e.target.files[0], false)} style={{ display: "none" }} />
-        <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
-          <button onClick={() => fileInputRef.current?.click()} disabled={uploadingImage} className="btn btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>{uploadingImage ? "Uploading..." : "Choose Photo"}</button>
-          {newItem.imageUrl && !uploadingImage && <img src={newItem.imageUrl} alt="Preview" style={{ width: 52, height: 52, borderRadius: 10, objectFit: "cover" }} />}
-        </div>
-
-        <label style={labelStyle}>Description</label>
-        <input placeholder="Short, appetising description (optional)" value={newItem.description} onChange={(e) => setNewItem((p) => ({ ...p, description: e.target.value }))} style={inputStyle} />
-
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 600, cursor: "pointer", marginBottom: 14 }}>
-          <input type="checkbox" checked={!!newItem.chefSpecial} onChange={(e) => setNewItem((p) => ({ ...p, chefSpecial: e.target.checked }))} /> Mark as Chef's Special
-        </label>
-
-        <button className="btn btn-primary" onClick={addMenuItem}>+ Add Item to Menu</button>
-      </div>
+      )}
 
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: "1 1 240px", minWidth: 220 }}>
@@ -1206,7 +1504,7 @@ function ReceptionPage() {
     </div>
   );
 
-  // === RENDER: TABLES ===
+    // === RENDER: TABLES ===
   const renderTables = () => {
     const useFloors = features.floors && floors.length > 0;
     const floorsToShow = useFloors ? floors : [{ id: null, name: "All Tables" }];
