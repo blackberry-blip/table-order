@@ -1,22 +1,31 @@
 "use client";
-// REPLACES your existing app/receptionist/page.js entirely.
+// REPLACES app/reception/page.js entirely.
 //
-// New in this version (see SETUP_GUIDE.md for the Firestore schema this needs):
-//  - Floors: floors collection, "Add Floor" button, tables grouped by floor.
-//  - VIP toggle per table.
-//  - Veg/Non-veg required field on every menu item + combos ("Add Combo" ->
-//    auto category "Combo Packs", isCombo:true, works exactly like a normal item).
-//  - Dashboard stat boxes are now clickable, glass-styled, and route to real
-//    Sales / Orders History / Items Sold analytics views with date filters.
-//  - Split bill (even split by N — the simplest version that actually ships).
-//  - UPI payment QR on "Generate Bill".
-//  - Promo banner (Settings) shown at the bottom of the customer table page.
-//  - Settings redesigned: flat full-width logo box, staff beside billing.
-//  - Sidebar: no emojis, bold text, light-blue active state.
-//  - Plan-gated: features not in the hotel's plan tier are hidden (see
-//    lib/plans.js) — check `features.x` before rendering pro/mid-only UI.
-//  - BULK IMPORT: CSV/JSON paste or upload, preview validation, auto-creates
-//    missing categories, skips duplicates, downloads template.
+// ALL-IN-ONE UPDATE — everything discussed for the receptionist side, built at once:
+//   1. Category pills: floating ✎ / ✕ removed. Tap "⋯" on a pill to expand an
+//      inline panel below the row (rename, change photo, delete, list items).
+//   2. Smart Suggestions + Bundle Discount rule engine (Menu tab). Receptionist
+//      authors the rules; billing applies them automatically.
+//   3. Call Waiter live feed (Dashboard) — waiterCalls collection, badge, Acknowledge,
+//      auto-clears stale (10 min) calls client-side.
+//   4. Tables tab redesign — QR hidden by default (Print opens a modal), green/red
+//      occupancy color, Merge Tables, Move/Swap an active order to another table.
+//   5. POS tab (new) — table grid + menu browser + cart, Dine-in/Takeaway toggle,
+//      Quick Order (no table), Send to Kitchen, Active Orders list with one-tap actions.
+//   6. Bar Section toggle (Settings) — auto-creates a "Bar" category when enabled.
+//   7. Badge thresholds (Most Loved / Most Ordered / Most Rated) — Settings.
+//   8. Subscription card (Settings) — plan display + Upgrade stub.
+//   9. Promo banner moved out of Settings into the Menu tab ("+ Add Exclusive Deal").
+//
+// Firestore additions this needs (see comments near each listener):
+//   restaurants/{id}/waiterCalls/{callId}      { table, reason, status, createdAt }
+//   restaurants/{id}/bundleRules/{ruleId}      { name, type, requiredItems[], threshold,
+//                                                 freeItemId, discountType, discountValue,
+//                                                 requiredCategories[], active, createdAt }
+//   restaurants/{id}/tables/{tableId}          + mergedGroupId, mergedWith[], isMerged
+//   restaurants/{id}/info/settings             { hasBar, thresholdMostLoved,
+//                                                 thresholdMostOrdered, thresholdMostRated }
+//   orders/{id}                                + orderType: "dinein" | "takeaway"
 
 import { useEffect, useState, useRef } from "react";
 import { db } from "@/lib/firebase";
@@ -31,6 +40,15 @@ import {
 
 const DEFAULT_CATEGORIES = ["Starters", "Mains", "Breads & Rice", "Continental", "Beverages", "Desserts"];
 const COMBO_CATEGORY = "Combo Packs";
+const BAR_CATEGORY = "Bar";
+const TAKEAWAY_TABLE = "TAKEAWAY";
+const WAITER_REASONS = [
+  { key: "water", label: "Water", icon: "💧" },
+  { key: "tissues", label: "Tissues", icon: "🧻" },
+  { key: "cutlery", label: "Cutlery", icon: "🍴" },
+  { key: "condiments", label: "Seasoning / Condiments", icon: "🧂" },
+  { key: "other", label: "Something else", icon: "✋" },
+];
 
 const ORDER_SECTIONS = [
   { key: "pending", label: "New", color: "#f59e0b", emptyMsg: "No new orders waiting.", emptyIcon: "🔔" },
@@ -71,12 +89,63 @@ function getCountdown(o) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-// === shared styles (module scope on purpose — see note below) ===
+// === Bundle rule evaluation (shared by billing + POS preview) ===
+function cartHasAllItems(items, requiredItemIds) {
+  const names = items.map((it) => it.itemId || it.id).filter(Boolean);
+  return requiredItemIds.every((id) => names.includes(id));
+}
+function cartSubtotalForCategories(items, menuItems, requiredCategories) {
+  return items.reduce((sum, it) => {
+    const mi = menuItems.find((m) => m.id === (it.itemId || it.id));
+    if (mi && requiredCategories.includes(mi.category)) return sum + it.price * it.qty;
+    return sum;
+  }, 0);
+}
+function computeBundleDiscounts(items, menuItems, bundleRules) {
+  const discounts = [];
+  const nowRules = (bundleRules || []).filter((r) => r.active);
+  for (const rule of nowRules) {
+    if (rule.type === "pairDiscount" && Array.isArray(rule.requiredItems) && rule.requiredItems.length >= 1) {
+      if (cartHasAllItems(items, rule.requiredItems)) {
+        let amt = 0;
+        if (rule.discountType === "flat") amt = Number(rule.discountValue) || 0;
+        else {
+          // percent off the cheaper of the two required items
+          const prices = rule.requiredItems
+            .map((id) => (items.find((it) => (it.itemId || it.id) === id)?.price) || 0)
+            .filter((p) => p > 0);
+          const base = prices.length ? Math.min(...prices) : 0;
+          amt = Math.round(base * ((Number(rule.discountValue) || 0) / 100));
+        }
+        if (amt > 0) discounts.push({ name: rule.name, amount: amt });
+      }
+    } else if (rule.type === "thresholdFreeItem" && rule.threshold) {
+      const subtotal = items.reduce((s, it) => s + it.price * it.qty, 0);
+      if (subtotal >= Number(rule.threshold)) {
+        const freeItem = menuItems.find((m) => m.id === rule.freeItemId);
+        if (freeItem) discounts.push({ name: `${rule.name} (Free ${freeItem.name})`, amount: freeItem.price });
+      }
+    } else if (rule.type === "categoryBundle" && Array.isArray(rule.requiredCategories) && rule.requiredCategories.length >= 1) {
+      const catsPresent = rule.requiredCategories.every((cat) => items.some((it) => {
+        const mi = menuItems.find((m) => m.id === (it.itemId || it.id));
+        return mi && mi.category === cat;
+      }));
+      if (catsPresent) {
+        const relevantSubtotal = cartSubtotalForCategories(items, menuItems, rule.requiredCategories);
+        const amt = Math.round(relevantSubtotal * ((Number(rule.discountValue) || 0) / 100));
+        if (amt > 0) discounts.push({ name: rule.name, amount: amt });
+      }
+    }
+  }
+  return discounts;
+}
+
+// === shared styles (module scope on purpose) ===
 const inputStyle = { width: "100%", padding: "11px 14px", border: "1px solid var(--border, #e6e1d6)", borderRadius: 10, fontSize: 14, marginBottom: 12, background: "var(--surface, #ffffff)", fontFamily: "inherit", boxSizing: "border-box" };
 const labelStyle = { fontSize: 12, color: "var(--text-secondary, #6b6b7b)", fontWeight: 700, display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 };
 const glassCard = { background: "rgba(255,255,255,0.55)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.5)" };
 
-// === shared components — MUST live at module scope, not inside ReceptionPage ===
+// === shared components — MUST live at module scope ===
 function StatCard({ label, value, color, sub, onClick }) {
   return (
     <div onClick={onClick} style={{ ...glassCard, padding: 20, display: "flex", alignItems: "center", gap: 16, borderRadius: 18, cursor: onClick ? "pointer" : "default", boxShadow: `0 8px 24px ${color}22` }}>
@@ -90,14 +159,18 @@ function StatCard({ label, value, color, sub, onClick }) {
   );
 }
 
-function OrderCard({ order, children }) {
+function OrderCard({ order, children, onMoveClick }) {
   return (
-    <div className="card" style={{ padding: 16, borderRadius: 14, animation: "riseIn 0.3s ease", position: "relative", borderLeft: order.isVIP ? "4px solid #eab308" : undefined }}>
+    <div className="card" style={{ padding: 16, borderRadius: 14, animation: "riseIn 0.3s ease", position: "relative", borderLeft: order.isVIP ? "4px solid #eab308" : (order.orderType === "takeaway" ? "4px solid #8b5cf6" : undefined) }}>
       {order.isVIP && <span style={{ position: "absolute", top: -8, right: 10, background: "#eab308", color: "#1a1a2e", fontSize: 10, fontWeight: 800, padding: "2px 9px", borderRadius: 100 }}>VIP</span>}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 30, height: 30, borderRadius: 9, background: "#1a1a2e", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13 }}>{order.table}</div>
           <span style={{ fontWeight: 700, fontSize: 14.5 }}>Table {order.table}</span>
+          {order.orderType === "takeaway" && <span style={{ background: "#ede9fe", color: "#6d28d9", fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 100 }}>📦 TAKEAWAY</span>}
+          {onMoveClick && order.orderType !== "takeaway" && (
+            <button onClick={() => onMoveClick(order)} style={{ background: "none", border: "1px solid var(--border, #e6e1d6)", borderRadius: 100, fontSize: 10.5, padding: "2px 8px", cursor: "pointer", color: "#888" }}>Move</button>
+          )}
         </div>
         <span style={{ fontSize: 11.5, color: "var(--text-secondary, #6b6b7b)" }}>{new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
       </div>
@@ -187,6 +260,7 @@ function MenuItemCard({ item, isEditing, editForm, setEditForm, editUploading, e
         {item.imageUrl ? <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36 }}>🍽️</div>}
         <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
           {item.isCombo && <span style={{ background: "#1a1a2e", color: "#fff", fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 100 }}>COMBO</span>}
+          {item.category === BAR_CATEGORY && <span style={{ background: "#7c3aed", color: "#fff", fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 100 }}>🍸 BAR</span>}
           {item.chefSpecial && <span style={{ background: "#1a1a2e", color: "#fff", fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 100 }}>CHEF'S SPECIAL</span>}
           {item.featured && <span style={{ background: "#e8a33d", color: "#fff", fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 100 }}>★ FEATURED</span>}
         </div>
@@ -232,6 +306,7 @@ function ReceptionPage() {
 
   const TABS = [
     { id: "dashboard", label: "Dashboard" },
+    { id: "pos", label: "POS" },
     { id: "menu", label: "Menu" },
     { id: "tables", label: "Tables" },
     { id: "settings", label: "Settings" },
@@ -267,6 +342,7 @@ function ReceptionPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [lastPendingCount, setLastPendingCount] = useState(0);
   const [lastBillCount, setLastBillCount] = useState(0);
+  const [lastWaiterCount, setLastWaiterCount] = useState(0);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [editUploading, setEditUploading] = useState(false);
   const [logoUploading, setLogoUploading] = useState(false);
@@ -276,7 +352,7 @@ function ReceptionPage() {
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategory, setNewCategory] = useState({ name: "", imageUrl: "" });
   const [categoryUploading, setCategoryUploading] = useState(false);
-  const [editingCategoryId, setEditingCategoryId] = useState(null);
+  const [expandedCategoryId, setExpandedCategoryId] = useState(null); // NEW: replaces floating ✎/✕
   const [editCategoryForm, setEditCategoryForm] = useState({ name: "", imageUrl: "" });
   const [editCategoryUploading, setEditCategoryUploading] = useState(false);
   const [showAddCombo, setShowAddCombo] = useState(false);
@@ -286,12 +362,13 @@ function ReceptionPage() {
   const [promoForm, setPromoForm] = useState({ imageUrl: "", title: "", linkedItemId: "" });
   const [promoUploading, setPromoUploading] = useState(false);
   const [promoSaved, setPromoSaved] = useState(false);
+  const [showAddPromo, setShowAddPromo] = useState(false); // NEW: promo now lives in Menu tab
   const [splitBillOrder, setSplitBillOrder] = useState(null);
   const [splitCount, setSplitCount] = useState(2);
   const [showSplash, setShowSplash] = useState(false);
   const [splashLeaving, setSplashLeaving] = useState(false);
 
-  // --- NEW: bulk import state ---
+  // --- bulk import state ---
   const [showAddItem, setShowAddItem] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importFormat, setImportFormat] = useState("csv");
@@ -299,6 +376,40 @@ function ReceptionPage() {
   const [importPreview, setImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
   const [autoCreateCategories, setAutoCreateCategories] = useState(true);
+
+  // --- NEW: Smart Suggestions / Bundle rule engine state ---
+  const [bundleRules, setBundleRules] = useState([]);
+  const [showAddBundleRule, setShowAddBundleRule] = useState(false);
+  const [newBundleRule, setNewBundleRule] = useState({
+    name: "", type: "pairDiscount", requiredItemA: "", requiredItemB: "",
+    discountType: "flat", discountValue: "", threshold: "", freeItemId: "",
+    requiredCategories: [],
+  });
+
+  // --- NEW: Call Waiter state ---
+  const [waiterCalls, setWaiterCalls] = useState([]);
+
+  // --- NEW: Tables — merge & move ---
+  const [mergeMode, setMergeMode] = useState(false);
+  const [mergePrimary, setMergePrimary] = useState(null);
+  const [mergeSelected, setMergeSelected] = useState([]);
+  const [qrModalTable, setQrModalTable] = useState(null);
+  const [movingOrder, setMovingOrder] = useState(null);
+  const [moveTargetTable, setMoveTargetTable] = useState("");
+
+  // --- NEW: POS state ---
+  const [posOrderType, setPosOrderType] = useState("dinein"); // dinein | takeaway
+  const [posTable, setPosTable] = useState(null);
+  const [posCategoryTab, setPosCategoryTab] = useState("all");
+  const [posSearch, setPosSearch] = useState("");
+  const [posCart, setPosCart] = useState({}); // { itemId: qty }
+  const [posNotes, setPosNotes] = useState("");
+  const [posSending, setPosSending] = useState(false);
+
+  // --- NEW: extra settings (bar toggle + badge thresholds) ---
+  const [siteSettings, setSiteSettings] = useState({ hasBar: false, thresholdMostLoved: 4.5, thresholdMostOrdered: 100, thresholdMostRated: 50 });
+  const [siteSettingsForm, setSiteSettingsForm] = useState({ hasBar: false, thresholdMostLoved: 4.5, thresholdMostOrdered: 100, thresholdMostRated: 50 });
+  const [siteSettingsSaved, setSiteSettingsSaved] = useState(false);
 
   const editCategoryFileInputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -371,6 +482,19 @@ function ReceptionPage() {
     return () => unsub();
   }, [restaurantId]);
 
+  // NEW: bar toggle + badge thresholds
+  useEffect(() => {
+    if (!restaurantId) return;
+    const unsub = onSnapshot(doc(db, "restaurants", restaurantId, "info", "settings"), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        const merged = { hasBar: !!d.hasBar, thresholdMostLoved: d.thresholdMostLoved ?? 4.5, thresholdMostOrdered: d.thresholdMostOrdered ?? 100, thresholdMostRated: d.thresholdMostRated ?? 50 };
+        setSiteSettings(merged); setSiteSettingsForm(merged);
+      }
+    });
+    return () => unsub();
+  }, [restaurantId]);
+
   useEffect(() => {
     if (!restaurantId) return;
     const q = query(collection(db, "restaurants", restaurantId, "menuItems"), orderBy("createdAt", "asc"));
@@ -402,7 +526,7 @@ function ReceptionPage() {
     }
   }, [floors]);
 
-  // Categories: live sync + one-time seed (+ always ensure Combo Packs exists)
+  // Categories: live sync + one-time seed (+ always ensure Combo Packs exists, + Bar when enabled)
   useEffect(() => {
     if (!restaurantId) return;
     const q = query(collection(db, "restaurants", restaurantId, "categories"), orderBy("order", "asc"));
@@ -421,6 +545,39 @@ function ReceptionPage() {
     });
     return () => unsub();
   }, [restaurantId]);
+
+  // NEW: auto-create/remove the Bar category when the toggle changes
+  useEffect(() => {
+    if (!restaurantId || categories.length === 0) return;
+    const hasBarCat = categories.some((c) => c.name === BAR_CATEGORY);
+    if (siteSettings.hasBar && !hasBarCat) {
+      addDoc(collection(db, "restaurants", restaurantId, "categories"), { name: BAR_CATEGORY, imageUrl: "", order: categories.length, createdAt: Date.now() });
+    }
+    // Note: we don't auto-delete Bar when turned off, in case it still has items — receptionist can delete manually once empty.
+  }, [siteSettings.hasBar, categories, restaurantId]);
+
+  // NEW: bundle / smart-suggestion rules
+  useEffect(() => {
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "bundleRules"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, (snap) => setBundleRules(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    return () => unsub();
+  }, [restaurantId]);
+
+  // NEW: waiter calls, live, newest first
+  useEffect(() => {
+    if (!restaurantId) return;
+    const q = query(collection(db, "restaurants", restaurantId, "waiterCalls"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, (snap) => setWaiterCalls(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    return () => unsub();
+  }, [restaurantId]);
+
+  // NEW: auto-clear acknowledged waiter calls older than 10 minutes (client-side housekeeping)
+  useEffect(() => {
+    const stale = waiterCalls.filter((c) => c.status === "acknowledged" && Date.now() - (c.createdAt || 0) > 10 * 60 * 1000);
+    stale.forEach((c) => { if (restaurantId) deleteDoc(doc(db, "restaurants", restaurantId, "waiterCalls", c.id)).catch(() => {}); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick]);
 
   // Staff
   useEffect(() => {
@@ -445,6 +602,7 @@ function ReceptionPage() {
   const served = orders.filter((o) => o.status === "served");
   const billRequested = orders.filter((o) => o.status === "bill_requested");
   const billed = orders.filter((o) => o.status === "billed");
+  const pendingWaiterCalls = waiterCalls.filter((c) => c.status === "pending");
 
   const ordersToday = orders.filter((o) => isToday(o.createdAt));
   const revenueOrdersToday = ordersToday.filter((o) => o.status === "billed" || o.status === "paid");
@@ -472,6 +630,15 @@ function ReceptionPage() {
     setLastBillCount(billRequested.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [billRequested.length]);
+
+  useEffect(() => {
+    if (pendingWaiterCalls.length > lastWaiterCount && lastWaiterCount > 0) {
+      playNotificationSound("newOrder");
+      showPopupNotification("Waiter Called", `Table ${pendingWaiterCalls[0]?.table} needs assistance`, { tag: "waiter-call", renotify: true });
+    }
+    setLastWaiterCount(pendingWaiterCalls.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingWaiterCalls.length]);
 
   // === uploads ===
   async function uploadGuard(file) {
@@ -542,34 +709,72 @@ function ReceptionPage() {
     await setDoc(doc(db, "restaurants", restaurantId, "info", "promoBanner"), {
       imageUrl: promoForm.imageUrl || "",
       title: promoForm.title || "",
-           linkedItemId: promoForm.linkedItemId || "",
+      linkedItemId: promoForm.linkedItemId || "",
     });
     setPromoSaved(true);
     setTimeout(() => setPromoSaved(false), 2000);
   }
+  async function saveSiteSettings() {
+    await setDoc(doc(db, "restaurants", restaurantId, "info", "settings"), {
+      hasBar: !!siteSettingsForm.hasBar,
+      thresholdMostLoved: parseFloat(siteSettingsForm.thresholdMostLoved) || 4.5,
+      thresholdMostOrdered: parseInt(siteSettingsForm.thresholdMostOrdered) || 100,
+      thresholdMostRated: parseInt(siteSettingsForm.thresholdMostRated) || 50,
+    });
+    setSiteSettingsSaved(true);
+    setTimeout(() => setSiteSettingsSaved(false), 2000);
+  }
+
+  // items for a given order, normalized to include itemId for bundle-rule matching
+  function normalizedItems(order) {
+    return order.items.map((it) => ({ ...it, itemId: it.itemId || menuItems.find((m) => m.name === it.name)?.id || null }));
+  }
 
   async function generateBill(o, withQr = false) {
-    const subtotal = o.items.reduce((sum, it) => sum + it.price * it.qty, 0);
-    const taxAmount = Math.round((subtotal * (billing.taxPercent || 0)) / 100);
-    const serviceAmount = Math.round((subtotal * (billing.servicePercent || 0)) / 100);
-    const grandTotal = subtotal + taxAmount + serviceAmount;
+    const items = normalizedItems(o);
+    const subtotal = items.reduce((sum, it) => sum + it.price * it.qty, 0);
+    const bundleDiscounts = computeBundleDiscounts(items, menuItems, bundleRules);
+    const discountTotal = bundleDiscounts.reduce((s, d) => s + d.amount, 0);
+    const discountedSubtotal = Math.max(0, subtotal - discountTotal);
+    const taxAmount = Math.round((discountedSubtotal * (billing.taxPercent || 0)) / 100);
+    const serviceAmount = Math.round((discountedSubtotal * (billing.servicePercent || 0)) / 100);
+    const grandTotal = discountedSubtotal + taxAmount + serviceAmount;
     const upiLink = withQr && billing.upiId
       ? `upi://pay?pa=${encodeURIComponent(billing.upiId)}&pn=${encodeURIComponent(profile.name || "Restaurant")}&am=${grandTotal}&cu=INR`
       : null;
 
     await updateDoc(doc(db, "restaurants", restaurantId, "orders", o.id), {
-      status: "billed", billSubtotal: subtotal, billTaxPercent: billing.taxPercent || 0, billTaxAmount: taxAmount,
+      status: "billed", billSubtotal: subtotal, billDiscounts: bundleDiscounts, billDiscountTotal: discountTotal,
+      billTaxPercent: billing.taxPercent || 0, billTaxAmount: taxAmount,
       billServicePercent: billing.servicePercent || 0, billServiceAmount: serviceAmount, billTotal: grandTotal,
       paymentQrUrl: upiLink ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(upiLink)}` : null,
     });
   }
 
-  async function markPaid(id) { await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "paid" }); }
+  async function markPaid(id) {
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "paid" });
+    // auto-clear a merged table group once its bill is paid
+    const order = orders.find((o) => o.id === id);
+    if (order) {
+      const t = tables.find((tb) => tb.number === order.table);
+      if (t && t.isMerged) {
+        const groupTables = tables.filter((tb) => tb.mergedGroupId === t.mergedGroupId);
+        const batch = writeBatch(db);
+        groupTables.forEach((tb) => batch.update(doc(db, "restaurants", restaurantId, "tables", tb.id), { mergedGroupId: null, mergedWith: [], isMerged: false }));
+        await batch.commit();
+      }
+    }
+  }
 
   function printBill(o) {
+    const bundleDiscounts = o.billDiscounts || [];
     const itemsHtml = o.items.map((it) => `
         <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;">
           <span>${it.name} x${it.qty}</span><span>Rs.${it.price * it.qty}</span>
+        </div>`).join("");
+    const discountsHtml = bundleDiscounts.map((d) => `
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;color:#16a34a;">
+          <span>${d.name}</span><span>-Rs.${d.amount}</span>
         </div>`).join("");
     const qrHtml = o.paymentQrUrl ? `<div style="text-align:center;margin-top:16px;"><img src="${o.paymentQrUrl}" style="width:160px;" /><div style="font-size:11px;color:#888;margin-top:6px;">Scan to pay via UPI</div></div>` : "";
     const html = `
@@ -592,6 +797,7 @@ function ReceptionPage() {
         ${itemsHtml}
         <div class="line"></div>
         <div class="row"><span>Subtotal</span><span>Rs.${o.billSubtotal}</span></div>
+        ${discountsHtml}
         ${o.billTaxAmount > 0 ? `<div class="row"><span>Tax (${o.billTaxPercent}%)</span><span>Rs.${o.billTaxAmount}</span></div>` : ""}
         ${o.billServiceAmount > 0 ? `<div class="row"><span>Service (${o.billServicePercent}%)</span><span>Rs.${o.billServiceAmount}</span></div>` : ""}
         <div class="line"></div>
@@ -605,7 +811,7 @@ function ReceptionPage() {
     win.document.close();
   }
 
-  // === split bill (even split by N — simplest version that ships reliably) ===
+  // === split bill (even split by N) ===
   function openSplitBill(o) { setSplitBillOrder(o); setSplitCount(2); }
   async function confirmEvenSplit() {
     if (!splitBillOrder) return;
@@ -637,11 +843,10 @@ function ReceptionPage() {
     if (!confirm(`Delete "${cat.name}" category?`)) return;
     await deleteDoc(doc(db, "restaurants", restaurantId, "categories", cat.id));
     if (menuTab === cat.name) setMenuTab("all");
+    setExpandedCategoryId(null);
   }
-  function startEditCategory(cat) { setEditingCategoryId(cat.id); setEditCategoryForm({ name: cat.name, imageUrl: cat.imageUrl || "" }); setShowAddCategory(false); }
-  async function saveEditCategory() {
-    const cat = categories.find((c) => c.id === editingCategoryId);
-    if (!cat) return;
+  function startEditCategory(cat) { setEditCategoryForm({ name: cat.name, imageUrl: cat.imageUrl || "" }); }
+  async function saveEditCategory(cat) {
     const newName = editCategoryForm.name.trim();
     if (!newName) return alert("Category name can't be empty");
     if (cat.name === COMBO_CATEGORY && newName !== COMBO_CATEGORY) return alert("Combo Packs category name can't be changed.");
@@ -652,7 +857,6 @@ function ReceptionPage() {
       await Promise.all(itemsToUpdate.map((m) => updateDoc(doc(db, "restaurants", restaurantId, "menuItems", m.id), { category: newName })));
       if (menuTab === cat.name) setMenuTab(newName);
     }
-    setEditingCategoryId(null);
   }
 
   // === menu items ===
@@ -691,6 +895,55 @@ function ReceptionPage() {
   async function toggleChefSpecial(item) { await updateDoc(doc(db, "restaurants", restaurantId, "menuItems", item.id), { chefSpecial: !item.chefSpecial }); }
   async function deleteItem(id) { if (!confirm("Delete this item?")) return; await deleteDoc(doc(db, "restaurants", restaurantId, "menuItems", id)); }
 
+  // === NEW: Smart Suggestions / Bundle rules ===
+  function resetBundleForm() {
+    setNewBundleRule({ name: "", type: "pairDiscount", requiredItemA: "", requiredItemB: "", discountType: "flat", discountValue: "", threshold: "", freeItemId: "", requiredCategories: [] });
+  }
+  async function addBundleRule() {
+    if (!newBundleRule.name.trim()) return alert("Give the rule a name");
+    const payload = { name: newBundleRule.name.trim(), type: newBundleRule.type, active: true, createdAt: Date.now() };
+    if (newBundleRule.type === "pairDiscount") {
+      if (!newBundleRule.requiredItemA || !newBundleRule.requiredItemB) return alert("Pick both items for the pair");
+      if (!newBundleRule.discountValue) return alert("Enter a discount value");
+      payload.requiredItems = [newBundleRule.requiredItemA, newBundleRule.requiredItemB];
+      payload.discountType = newBundleRule.discountType;
+      payload.discountValue = parseFloat(newBundleRule.discountValue);
+    } else if (newBundleRule.type === "thresholdFreeItem") {
+      if (!newBundleRule.threshold || !newBundleRule.freeItemId) return alert("Set a threshold amount and pick the free item");
+      payload.threshold = parseFloat(newBundleRule.threshold);
+      payload.freeItemId = newBundleRule.freeItemId;
+    } else if (newBundleRule.type === "categoryBundle") {
+      if (newBundleRule.requiredCategories.length < 2 || !newBundleRule.discountValue) return alert("Pick at least 2 categories and a % discount");
+      payload.requiredCategories = newBundleRule.requiredCategories;
+      payload.discountType = "percent";
+      payload.discountValue = parseFloat(newBundleRule.discountValue);
+    }
+    await addDoc(collection(db, "restaurants", restaurantId, "bundleRules"), payload);
+    resetBundleForm();
+    setShowAddBundleRule(false);
+  }
+  async function toggleBundleRuleActive(rule) { await updateDoc(doc(db, "restaurants", restaurantId, "bundleRules", rule.id), { active: !rule.active }); }
+  async function deleteBundleRule(id) { if (!confirm("Delete this rule?")) return; await deleteDoc(doc(db, "restaurants", restaurantId, "bundleRules", id)); }
+  function bundleRuleSummary(rule) {
+    if (rule.type === "pairDiscount") {
+      const names = (rule.requiredItems || []).map((id) => menuItems.find((m) => m.id === id)?.name || "?").join(" + ");
+      const val = rule.discountType === "flat" ? `₹${rule.discountValue} off` : `${rule.discountValue}% off`;
+      return `${names} → ${val}`;
+    }
+    if (rule.type === "thresholdFreeItem") {
+      const freeName = menuItems.find((m) => m.id === rule.freeItemId)?.name || "?";
+      return `Spend ₹${rule.threshold} → Free ${freeName}`;
+    }
+    if (rule.type === "categoryBundle") {
+      return `${(rule.requiredCategories || []).join(" + ")} → ${rule.discountValue}% off`;
+    }
+    return rule.name;
+  }
+
+  // === NEW: Call Waiter ===
+  async function acknowledgeWaiterCall(id) { await updateDoc(doc(db, "restaurants", restaurantId, "waiterCalls", id), { status: "acknowledged" }); }
+  async function dismissWaiterCall(id) { await deleteDoc(doc(db, "restaurants", restaurantId, "waiterCalls", id)); }
+
   // === floors & tables ===
   async function addFloor() {
     if (!newFloorName.trim()) return alert("Give the floor a name");
@@ -707,7 +960,7 @@ function ReceptionPage() {
   }
   async function addTable(floorId) {
     const nextNumber = tables.length > 0 ? Math.max(...tables.map((t) => t.number)) + 1 : 1;
-    await addDoc(collection(db, "restaurants", restaurantId, "tables"), { number: nextNumber, floorId: floorId || null, isVIP: false, createdAt: Date.now() });
+    await addDoc(collection(db, "restaurants", restaurantId, "tables"), { number: nextNumber, floorId: floorId || null, isVIP: false, mergedGroupId: null, mergedWith: [], isMerged: false, createdAt: Date.now() });
   }
   async function deleteTable(id) {
     if (!confirm("Delete this table? Its QR code will stop working.")) return;
@@ -747,6 +1000,44 @@ function ReceptionPage() {
     const win = window.open("", "_blank", "width=420,height=520");
     win.document.write(html);
     win.document.close();
+  }
+
+  // NEW: merge tables
+  function startMerge(primaryTableId) { setMergeMode(true); setMergePrimary(primaryTableId); setMergeSelected([]); }
+  function cancelMerge() { setMergeMode(false); setMergePrimary(null); setMergeSelected([]); }
+  function toggleMergeSelect(tableId) {
+    setMergeSelected((prev) => prev.includes(tableId) ? prev.filter((id) => id !== tableId) : [...prev, tableId]);
+  }
+  async function confirmMerge() {
+    if (!mergePrimary || mergeSelected.length === 0) return alert("Select at least one table to merge in");
+    const primary = tables.find((t) => t.id === mergePrimary);
+    const groupId = `group_${primary.number}`;
+    const involvedIds = [mergePrimary, ...mergeSelected];
+    const involvedNumbers = tables.filter((t) => involvedIds.includes(t.id)).map((t) => t.number);
+    const batch = writeBatch(db);
+    involvedIds.forEach((id) => {
+      const t = tables.find((tb) => tb.id === id);
+      batch.update(doc(db, "restaurants", restaurantId, "tables", id), {
+        mergedGroupId: groupId, mergedWith: involvedNumbers.filter((n) => n !== t.number), isMerged: true,
+      });
+    });
+    await batch.commit();
+    cancelMerge();
+  }
+  async function unmergeTable(t) {
+    if (!t.mergedGroupId) return;
+    const groupTables = tables.filter((tb) => tb.mergedGroupId === t.mergedGroupId);
+    const batch = writeBatch(db);
+    groupTables.forEach((tb) => batch.update(doc(db, "restaurants", restaurantId, "tables", tb.id), { mergedGroupId: null, mergedWith: [], isMerged: false }));
+    await batch.commit();
+  }
+
+  // NEW: move / swap an order to a different table
+  function openMoveOrder(order) { setMovingOrder(order); setMoveTargetTable(""); }
+  async function confirmMoveOrder() {
+    if (!movingOrder || !moveTargetTable) return;
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", movingOrder.id), { table: parseInt(moveTargetTable, 10) || moveTargetTable });
+    setMovingOrder(null);
   }
 
   // === staff ===
@@ -908,21 +1199,17 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
       const menuCol = collection(db, "restaurants", restaurantId, "menuItems");
       const catCol = collection(db, "restaurants", restaurantId, "categories");
 
-      // Create missing categories first
       const existingCats = new Set(categories.map((c) => c.name));
       const catsToCreate = importPreview.categoriesNeeded.filter((c) => !existingCats.has(c));
-      const newCatIds = {};
       for (const catName of catsToCreate) {
         const ref = doc(catCol);
         batch.set(ref, { name: catName, imageUrl: "", order: categories.length + catsToCreate.indexOf(catName), createdAt: Date.now() });
-        newCatIds[catName] = ref.id;
       }
 
-      // Add menu items
       const existingNames = new Set(menuItems.map((m) => m.name.toLowerCase()));
       let imported = 0;
       for (const item of importPreview.items) {
-        if (existingNames.has(item.name.toLowerCase())) continue; // skip duplicates
+        if (existingNames.has(item.name.toLowerCase())) continue;
         const ref = doc(menuCol);
         batch.set(ref, { ...item, createdAt: Date.now() });
         imported++;
@@ -938,6 +1225,42 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
     } catch (err) {
       setImporting(false);
       alert("Import failed: " + err.message);
+    }
+  }
+
+  // === NEW: POS actions ===
+  function posAddItem(item) { setPosCart((p) => ({ ...p, [item.id]: (p[item.id] || 0) + 1 })); }
+  function posRemoveItem(item) { setPosCart((p) => { const n = { ...p }; if (n[item.id] > 1) n[item.id]--; else delete n[item.id]; return n; }); }
+  function posCartLines() {
+    return Object.entries(posCart).map(([id, qty]) => {
+      const mi = menuItems.find((m) => m.id === id);
+      return mi ? { itemId: id, name: mi.name, price: mi.price, qty } : null;
+    }).filter(Boolean);
+  }
+  const posLines = posCartLines();
+  const posSubtotal = posLines.reduce((s, l) => s + l.price * l.qty, 0);
+  const posDiscounts = computeBundleDiscounts(posLines, menuItems, bundleRules);
+  const posDiscountTotal = posDiscounts.reduce((s, d) => s + d.amount, 0);
+
+  async function posSendToKitchen() {
+    if (posLines.length === 0) return alert("Add at least one item");
+    if (posOrderType === "dinein" && !posTable) return alert("Select a table, or switch to Quick Order (takeaway)");
+    setPosSending(true);
+    try {
+      await addDoc(collection(db, "restaurants", restaurantId, "orders"), {
+        table: posOrderType === "takeaway" ? TAKEAWAY_TABLE : posTable,
+        items: posLines.map((l) => ({ itemId: l.itemId, name: l.name, price: l.price, qty: l.qty })),
+        status: "confirmed",
+        orderType: posOrderType,
+        notes: posNotes || "",
+        createdAt: Date.now(),
+      });
+      setPosCart({}); setPosNotes(""); setPosTable(null);
+      alert("Order sent to kitchen!");
+    } catch (err) {
+      alert("Failed to send order: " + err.message);
+    } finally {
+      setPosSending(false);
     }
   }
 
@@ -1024,7 +1347,7 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
           {list.map((o) => (
             <div key={o.id} className="card" style={{ padding: 16, borderRadius: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontWeight: 700 }}>Table {o.table} {o.isVIP && <span style={{ color: "#eab308" }}>★</span>}</span>
+                <span style={{ fontWeight: 700 }}>Table {o.table} {o.isVIP && <span style={{ color: "#eab308" }}>★</span>} {o.orderType === "takeaway" && <span style={{ color: "#8b5cf6" }}>📦</span>}</span>
                 <span style={{ fontSize: 12, color: "#888" }}>{new Date(o.createdAt).toLocaleString()}</span>
               </div>
               {o.items.map((it, i) => (
@@ -1074,6 +1397,40 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
     );
   }
 
+  // === NEW: Waiter Calls panel (Dashboard) ===
+  function renderWaiterCallsPanel() {
+    if (waiterCalls.length === 0) return null;
+    return (
+      <div className="card" style={{ borderRadius: 18, overflow: "hidden", marginBottom: 20 }}>
+        <div style={{ padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border, #e6e1d6)" }}>
+          <h3 style={{ fontSize: 15, fontWeight: 800, margin: 0 }}>🛎️ Waiter Calls</h3>
+          {pendingWaiterCalls.length > 0 && <span style={{ background: "#dc2626", color: "#fff", fontSize: 11, fontWeight: 800, padding: "2px 9px", borderRadius: 100 }}>{pendingWaiterCalls.length} pending</span>}
+        </div>
+        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+          {waiterCalls.slice(0, 8).map((c) => {
+            const reason = WAITER_REASONS.find((r) => r.key === c.reason) || { icon: "✋", label: c.reason };
+            return (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderRadius: 10, background: c.status === "pending" ? "#fef2f2" : "var(--surface-2, #f3efe6)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 18 }}>{reason.icon}</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>Table {c.table} — {reason.label}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{new Date(c.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+                  </div>
+                </div>
+                {c.status === "pending" ? (
+                  <button className="btn btn-sm btn-primary" onClick={() => acknowledgeWaiterCall(c.id)}>Acknowledge</button>
+                ) : (
+                  <button className="btn btn-sm btn-ghost" onClick={() => dismissWaiterCall(c.id)}>Dismiss</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   // === RENDER: DASHBOARD ===
   const renderDashboard = () => {
     if (dashboardView === "sales") return renderSalesAnalytics();
@@ -1090,12 +1447,14 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
           <p style={{ fontSize: 13.5, color: "var(--text-secondary, #6b6b7b)", margin: 0 }}>{new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 14, marginBottom: 30 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 14, marginBottom: 24 }}>
           <StatCard label="Today's Sales" value={`₹${todaySales.toLocaleString()}`} color="#16a34a" sub={`Avg ₹${avgOrderValue}/order`} onClick={() => { setDashboardView("sales"); setAnalyticsFilter("today"); }} />
           <StatCard label="Orders Today" value={todayOrderCount} color="#3b82f6" onClick={() => { setDashboardView("orders"); setAnalyticsFilter("today"); }} />
           <StatCard label="Items Sold" value={todayItemsSold} color="#e8a33d" onClick={() => { setDashboardView("items"); setAnalyticsFilter("today"); }} />
-          <StatCard label="Needs Attention" value={pending.length + billRequested.length} color="#dc2626" sub={pending.length + billRequested.length > 0 ? "Action needed now" : "All caught up"} onClick={() => setOrderFilter(pending.length > 0 ? "pending" : "billRequested")} />
+          <StatCard label="Needs Attention" value={pending.length + billRequested.length + pendingWaiterCalls.length} color="#dc2626" sub={pending.length + billRequested.length + pendingWaiterCalls.length > 0 ? "Action needed now" : "All caught up"} onClick={() => setOrderFilter(pending.length > 0 ? "pending" : "billRequested")} />
         </div>
+
+        {renderWaiterCallsPanel()}
 
         <div className="card" style={{ borderRadius: 18, overflow: "hidden" }}>
           <div style={{ padding: "18px 20px 0" }}>
@@ -1132,7 +1491,7 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
                   </OrderCard>
                 ))}
                 {orderFilter === "active" && currentData.map((o) => (
-                  <OrderCard key={o.id} order={o}>
+                  <OrderCard key={o.id} order={o} onMoveClick={openMoveOrder}>
                     {o.status === "ready" ? (
                       <button className="btn btn-sm btn-success" onClick={() => markServed(o.id)} style={{ width: "100%" }}>Mark as Served</button>
                     ) : (
@@ -1156,6 +1515,11 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
                     {o.items.map((it, i) => (
                       <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, padding: "3px 0" }}>
                         <span>{it.name} ×{it.qty}</span><span>₹{it.price * it.qty}</span>
+                      </div>
+                    ))}
+                    {o.billDiscounts && o.billDiscounts.length > 0 && o.billDiscounts.map((d, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "2px 0", color: "#16a34a" }}>
+                        <span>{d.name}</span><span>-₹{d.amount}</span>
                       </div>
                     ))}
                     <div style={{ borderTop: "1px dashed var(--border, #e6e1d6)", marginTop: 10, paddingTop: 10 }}>
@@ -1188,6 +1552,119 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
     );
   };
 
+  // === NEW: RENDER POS ===
+  const renderPOS = () => {
+    const posCategories = [{ id: "all", name: "all" }, ...categories];
+    const posItems = menuItems.filter((m) => {
+      const matchesCat = posCategoryTab === "all" || m.category === posCategoryTab;
+      const matchesSearch = !posSearch.trim() || m.name.toLowerCase().includes(posSearch.trim().toLowerCase());
+      return matchesCat && matchesSearch && m.available;
+    });
+    return (
+      <div>
+        <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 20, fontFamily: "'Fraunces', serif" }}>Point of Sale</h2>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "220px 1fr 320px", gap: 18, alignItems: "flex-start" }}>
+
+          {/* LEFT: table grid + quick order */}
+          <div className="card" style={{ padding: 16, borderRadius: 16 }}>
+            <button
+              onClick={() => { setPosOrderType(posOrderType === "takeaway" ? "dinein" : "takeaway"); setPosTable(null); }}
+              className="btn"
+              style={{ width: "100%", marginBottom: 14, background: posOrderType === "takeaway" ? "#8b5cf6" : "var(--surface-2, #f3efe6)", color: posOrderType === "takeaway" ? "#fff" : "#555" }}
+            >📦 {posOrderType === "takeaway" ? "Quick Order Active" : "Quick Order (Takeaway)"}</button>
+            <div style={{ fontSize: 11.5, fontWeight: 800, color: "#888", textTransform: "uppercase", marginBottom: 8 }}>Tables</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+              {tables.map((t) => {
+                const activeCount = orders.filter((o) => o.table === t.number && !["paid", "cancelled", "declined", "merged"].includes(o.status)).length;
+                const isSelected = posOrderType === "dinein" && posTable === t.number;
+                return (
+                  <button key={t.id} onClick={() => { setPosOrderType("dinein"); setPosTable(t.number); }}
+                    style={{ padding: "10px 4px", borderRadius: 10, border: isSelected ? "2px solid #1a1a2e" : "2px solid transparent", background: activeCount > 0 ? "#fee2e2" : "#dcfce7", color: activeCount > 0 ? "#991b1b" : "#166534", fontWeight: 800, fontSize: 13, cursor: "pointer" }}>
+                    {t.number}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* CENTER: menu browser */}
+          <div className="card" style={{ padding: 16, borderRadius: 16 }}>
+            <input placeholder="Search menu..." value={posSearch} onChange={(e) => setPosSearch(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
+            <div style={{ display: "flex", gap: 8, overflowX: "auto", marginBottom: 14, paddingBottom: 4 }}>
+              {posCategories.map((c) => (
+                <button key={c.id} onClick={() => setPosCategoryTab(c.name === "all" ? "all" : c.name)}
+                  style={{ padding: "7px 14px", borderRadius: 100, border: "none", whiteSpace: "nowrap", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: posCategoryTab === c.name ? "#1a1a2e" : "var(--surface-2, #f3efe6)", color: posCategoryTab === c.name ? "#fff" : "#666" }}>
+                  {c.name === "all" ? "All" : c.name}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10, maxHeight: 440, overflowY: "auto" }}>
+              {posItems.map((item) => (
+                <div key={item.id} className="card" style={{ padding: 10, borderRadius: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2 }}>{item.name}</div>
+                  <div style={{ fontSize: 12, color: "#e8a33d", fontWeight: 800, marginBottom: 8 }}>₹{item.price}</div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <button onClick={() => posRemoveItem(item)} className="btn btn-sm btn-ghost" style={{ width: 28, padding: 0 }}>-</button>
+                    <span style={{ fontWeight: 700, minWidth: 16 }}>{posCart[item.id] || 0}</span>
+                    <button onClick={() => posAddItem(item)} className="btn btn-sm btn-primary" style={{ width: 28, padding: 0 }}>+</button>
+                  </div>
+                </div>
+              ))}
+              {posItems.length === 0 && <p style={{ color: "#999", gridColumn: "1/-1", textAlign: "center" }}>No items match.</p>}
+            </div>
+          </div>
+
+          {/* RIGHT: cart */}
+          <div className="card" style={{ padding: 16, borderRadius: 16, position: isMobile ? "static" : "sticky", top: 16 }}>
+            <h3 style={{ fontSize: 14.5, fontWeight: 800, marginBottom: 10 }}>
+              {posOrderType === "takeaway" ? "📦 Takeaway Order" : posTable ? `Table ${posTable}` : "Select a table"}
+            </h3>
+            {posLines.length === 0 ? (
+              <p style={{ color: "#999", fontSize: 13 }}>Cart is empty.</p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+                {posLines.map((l) => (
+                  <div key={l.itemId} style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                    <span>{l.name} ×{l.qty}</span><span>₹{l.price * l.qty}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {posDiscounts.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                {posDiscounts.map((d, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#16a34a" }}>
+                    <span>🔥 {d.name}</span><span>-₹{d.amount}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ borderTop: "1px dashed var(--border, #e6e1d6)", paddingTop: 10, marginBottom: 12, display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 15 }}>
+              <span>Subtotal</span><span>₹{Math.max(0, posSubtotal - posDiscountTotal)}</span>
+            </div>
+            <input placeholder="Order notes (optional)" value={posNotes} onChange={(e) => setPosNotes(e.target.value)} style={inputStyle} />
+            <button className="btn btn-primary" style={{ width: "100%" }} disabled={posSending} onClick={posSendToKitchen}>{posSending ? "Sending..." : "Send to Kitchen"}</button>
+          </div>
+        </div>
+
+        {/* Active orders quick list */}
+        <div style={{ marginTop: 28 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>Active Orders</h3>
+          {active.length === 0 && pending.length === 0 ? <p style={{ color: "#999", fontSize: 13 }}>Nothing in progress.</p> : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+              {[...pending, ...active].map((o) => (
+                <OrderCard key={o.id} order={o}>
+                  {o.status === "pending" && <button className="btn btn-sm btn-primary" onClick={() => confirmOrder(o.id)} style={{ flex: 1 }}>Confirm</button>}
+                  {o.status === "ready" && <button className="btn btn-sm btn-success" onClick={() => markServed(o.id)} style={{ flex: 1 }}>Mark Served</button>}
+                </OrderCard>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // === RENDER: MENU ===
   const filteredCategoryItems = menuItems.filter((m) => {
     const matchesTab = menuTab === "all" || m.category === menuTab;
@@ -1199,13 +1676,142 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
         <h2 style={{ fontSize: 24, fontWeight: 800, margin: 0, fontFamily: "'Fraunces', serif" }}>Menu</h2>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-ghost" onClick={() => { setShowAddItem((s) => !s); setShowAddCombo(false); setShowAddCategory(false); setShowImportModal(false); }}>{showAddItem ? "Close" : "+ Add Item"}</button>
-          {features.combos && <button className="btn btn-ghost" onClick={() => { setShowAddCombo((s) => !s); setShowAddItem(false); setShowAddCategory(false); setShowImportModal(false); }}>{showAddCombo ? "Close" : "+ Add Combo"}</button>}
-          <button className="btn btn-ghost" onClick={() => { setShowAddCategory((s) => !s); setShowAddItem(false); setShowAddCombo(false); setShowImportModal(false); }}>{showAddCategory ? "Close" : "+ Add Category"}</button>
-          <button className="btn btn-primary" onClick={() => { setShowImportModal(true); setShowAddItem(false); setShowAddCombo(false); setShowAddCategory(false); }}>↑ Import Menu</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="btn btn-ghost" onClick={() => { setShowAddItem((s) => !s); setShowAddCombo(false); setShowAddCategory(false); setShowImportModal(false); setShowAddBundleRule(false); setShowAddPromo(false); }}>{showAddItem ? "Close" : "+ Add Item"}</button>
+          {features.combos && <button className="btn btn-ghost" onClick={() => { setShowAddCombo((s) => !s); setShowAddItem(false); setShowAddCategory(false); setShowImportModal(false); setShowAddBundleRule(false); setShowAddPromo(false); }}>{showAddCombo ? "Close" : "+ Add Combo"}</button>}
+          <button className="btn btn-ghost" onClick={() => { setShowAddCategory((s) => !s); setShowAddItem(false); setShowAddCombo(false); setShowImportModal(false); setShowAddBundleRule(false); setShowAddPromo(false); }}>{showAddCategory ? "Close" : "+ Add Category"}</button>
+          {features.promoBanner && <button className="btn btn-ghost" onClick={() => { setShowAddPromo((s) => !s); setShowAddItem(false); setShowAddCombo(false); setShowAddCategory(false); setShowImportModal(false); setShowAddBundleRule(false); }}>{showAddPromo ? "Close" : "+ Add Exclusive Deal"}</button>}
+          {features.smartSuggestions && <button className="btn btn-ghost" onClick={() => { setShowAddBundleRule((s) => !s); setShowAddItem(false); setShowAddCombo(false); setShowAddCategory(false); setShowImportModal(false); setShowAddPromo(false); }}>{showAddBundleRule ? "Close" : "+ Smart Deal"}</button>}
+          <button className="btn btn-primary" onClick={() => { setShowImportModal(true); setShowAddItem(false); setShowAddCombo(false); setShowAddCategory(false); setShowAddBundleRule(false); setShowAddPromo(false); }}>↑ Import Menu</button>
         </div>
       </div>
+
+      {/* NEW: Exclusive Deal (promo banner), moved here from Settings */}
+      {showAddPromo && (
+        <div className="card" style={{ padding: 20, borderRadius: 16, marginBottom: 20, border: "2px dashed #e8a33d" }}>
+          <h3 style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 6 }}>Exclusive Deal Banner</h3>
+          <p style={{ fontSize: 12.5, color: "var(--text-secondary, #6b6b7b)", marginBottom: 14 }}>Shown at the bottom of the customer menu. Optionally link it to an item/combo so tapping adds it to the cart.</p>
+          <label style={labelStyle}>Banner Title</label>
+          <input placeholder="e.g. 30% off combos this week" value={promoForm.title} onChange={(e) => setPromoForm((p) => ({ ...p, title: e.target.value }))} style={inputStyle} />
+          <label style={labelStyle}>Banner Image</label>
+          <input ref={promoFileInputRef} type="file" accept="image/*" onChange={(e) => handlePromoImageUpload(e.target.files[0])} style={{ display: "none" }} />
+          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
+            <button onClick={() => promoFileInputRef.current?.click()} disabled={promoUploading} className="btn btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>{promoUploading ? "Uploading..." : "Upload Photo"}</button>
+            {promoForm.imageUrl && !promoUploading && <img src={promoForm.imageUrl} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: "cover" }} />}
+          </div>
+          <label style={labelStyle}>Link to item/combo (optional)</label>
+          <select value={promoForm.linkedItemId} onChange={(e) => setPromoForm((p) => ({ ...p, linkedItemId: e.target.value }))} style={inputStyle}>
+            <option value="">No link — image only</option>
+            {menuItems.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+          <button className="btn btn-primary" onClick={savePromoBanner}>{promoSaved ? "Saved ✓" : "Save Banner"}</button>
+        </div>
+      )}
+
+      {/* NEW: Smart Suggestions / Bundle Discount rule builder */}
+      {showAddBundleRule && (
+        <div className="card" style={{ padding: 20, borderRadius: 16, marginBottom: 20, border: "2px dashed #7c3aed" }}>
+          <h3 style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 6 }}>New Smart Deal</h3>
+          <p style={{ fontSize: 12.5, color: "var(--text-secondary, #6b6b7b)", marginBottom: 14 }}>You set the rule and the discount — billing applies it automatically, no manual math.</p>
+          <label style={labelStyle}>Deal Name</label>
+          <input placeholder="e.g. Weekend Feast" value={newBundleRule.name} onChange={(e) => setNewBundleRule((p) => ({ ...p, name: e.target.value }))} style={inputStyle} />
+          <label style={labelStyle}>Deal Type</label>
+          <select value={newBundleRule.type} onChange={(e) => setNewBundleRule((p) => ({ ...p, type: e.target.value }))} style={inputStyle}>
+            <option value="pairDiscount">Pair Discount (Item A + Item B → off)</option>
+            <option value="thresholdFreeItem">Spend Threshold → Free Item</option>
+            <option value="categoryBundle">Category Bundle → % off</option>
+          </select>
+
+          {newBundleRule.type === "pairDiscount" && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={labelStyle}>Item A</label>
+                  <select value={newBundleRule.requiredItemA} onChange={(e) => setNewBundleRule((p) => ({ ...p, requiredItemA: e.target.value }))} style={inputStyle}>
+                    <option value="">Select item</option>
+                    {menuItems.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>Item B</label>
+                  <select value={newBundleRule.requiredItemB} onChange={(e) => setNewBundleRule((p) => ({ ...p, requiredItemB: e.target.value }))} style={inputStyle}>
+                    <option value="">Select item</option>
+                    {menuItems.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={labelStyle}>Discount Type</label>
+                  <select value={newBundleRule.discountType} onChange={(e) => setNewBundleRule((p) => ({ ...p, discountType: e.target.value }))} style={inputStyle}>
+                    <option value="flat">Flat ₹ off</option>
+                    <option value="percent">% off cheaper item</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>{newBundleRule.discountType === "flat" ? "Amount (₹)" : "Percent (%)"}</label>
+                  <input type="number" value={newBundleRule.discountValue} onChange={(e) => setNewBundleRule((p) => ({ ...p, discountValue: e.target.value }))} style={inputStyle} />
+                </div>
+              </div>
+            </>
+          )}
+
+          {newBundleRule.type === "thresholdFreeItem" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div>
+                <label style={labelStyle}>Spend Threshold (₹)</label>
+                <input type="number" value={newBundleRule.threshold} onChange={(e) => setNewBundleRule((p) => ({ ...p, threshold: e.target.value }))} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Free Item</label>
+                <select value={newBundleRule.freeItemId} onChange={(e) => setNewBundleRule((p) => ({ ...p, freeItemId: e.target.value }))} style={inputStyle}>
+                  <option value="">Select item</option>
+                  {menuItems.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {newBundleRule.type === "categoryBundle" && (
+            <>
+              <label style={labelStyle}>Required Categories (select 2+)</label>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                {categories.map((c) => {
+                  const selected = newBundleRule.requiredCategories.includes(c.name);
+                  return (
+                    <button key={c.id} type="button" onClick={() => setNewBundleRule((p) => ({ ...p, requiredCategories: selected ? p.requiredCategories.filter((n) => n !== c.name) : [...p.requiredCategories, c.name] }))}
+                      style={{ padding: "6px 14px", borderRadius: 100, border: selected ? "2px solid #7c3aed" : "1px solid #ddd", background: selected ? "#7c3aed15" : "#fff", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>{c.name}</button>
+                  );
+                })}
+              </div>
+              <label style={labelStyle}>Percent Off (%)</label>
+              <input type="number" value={newBundleRule.discountValue} onChange={(e) => setNewBundleRule((p) => ({ ...p, discountValue: e.target.value }))} style={inputStyle} />
+            </>
+          )}
+
+          <button className="btn btn-primary" onClick={addBundleRule}>+ Create Deal</button>
+
+          {bundleRules.length > 0 && (
+            <div style={{ marginTop: 18, borderTop: "1px solid var(--border, #e6e1d6)", paddingTop: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#888", textTransform: "uppercase", marginBottom: 10 }}>Active & Saved Deals</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {bundleRules.map((rule) => (
+                  <div key={rule.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "var(--surface-2, #f3efe6)", borderRadius: 10 }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>{rule.name}</div>
+                      <div style={{ fontSize: 11.5, color: "#888" }}>{bundleRuleSummary(rule)}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="btn btn-sm" onClick={() => toggleBundleRuleActive(rule)} style={{ background: rule.active ? "#dcfce7" : "#fef3c7", color: rule.active ? "#166534" : "#92400e", border: "none" }}>{rule.active ? "Active" : "Paused"}</button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => deleteBundleRule(rule.id)} style={{ color: "#dc2626" }}>Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* BULK IMPORT MODAL */}
       {showImportModal && (
@@ -1240,7 +1846,6 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
             Preview Import
           </button>
 
-          {/* PREVIEW SECTION */}
           {importPreview && (
             <div style={{ marginBottom: 16 }}>
               {importPreview.error && (
@@ -1424,7 +2029,8 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, marginBottom: 22 }}>
+      {/* Category pills — NO floating ✎/✕. Tap ⋯ to expand the panel below. */}
+      <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, marginBottom: 4 }}>
         <button onClick={() => setMenuTab("all")} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 68, background: "none", border: "none", cursor: "pointer", flexShrink: 0 }}>
           <div style={{ width: 52, height: 52, borderRadius: "50%", background: menuTab === "all" ? "#1a1a2e" : "var(--surface-2, #f3efe6)", color: menuTab === "all" ? "#fff" : "var(--text-secondary, #6b6b7b)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, border: menuTab === "all" ? "2px solid #1a1a2e" : "2px solid transparent" }}>🍴</div>
           <span style={{ fontSize: 11.5, fontWeight: menuTab === "all" ? 800 : 600, color: menuTab === "all" ? "var(--text, #1a1a2e)" : "var(--text-secondary, #6b6b7b)" }}>All</span>
@@ -1437,15 +2043,14 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
               <div style={{ position: "relative" }}>
                 <button onClick={() => setMenuTab(cat.name)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
                   <div style={{ width: 52, height: 52, borderRadius: "50%", overflow: "hidden", background: isActive ? "#e8a33d" : "var(--surface-2, #f3efe6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, border: isActive ? "2px solid #e8a33d" : "2px solid var(--border, #e6e1d6)" }}>
-                    {cat.imageUrl ? <img src={cat.imageUrl} alt={cat.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "🍽️"}
+                    {cat.imageUrl ? <img src={cat.imageUrl} alt={cat.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : (cat.name === BAR_CATEGORY ? "🍸" : "🍽️")}
                   </div>
                 </button>
-                {cat.name !== COMBO_CATEGORY && (
-                  <>
-                    <button onClick={() => startEditCategory(cat)} title="Edit category" style={{ position: "absolute", top: -4, left: -4, width: 19, height: 19, borderRadius: "50%", background: "#1a1a2e", color: "#fff", border: "2px solid var(--surface, #fff)", fontSize: 9.5, cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>✎</button>
-                    <button onClick={() => deleteCategory(cat)} title="Delete category" style={{ position: "absolute", top: -4, right: -4, width: 19, height: 19, borderRadius: "50%", background: "var(--danger, #dc2626)", color: "#fff", border: "2px solid var(--surface, #fff)", fontSize: 10, cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
-                  </>
-                )}
+                <button
+                  onClick={() => { const next = expandedCategoryId === cat.id ? null : cat.id; setExpandedCategoryId(next); if (next) startEditCategory(cat); }}
+                  title="Options"
+                  style={{ position: "absolute", bottom: -4, right: -4, width: 20, height: 20, borderRadius: "50%", background: "#1a1a2e", color: "#fff", border: "2px solid var(--surface, #fff)", fontSize: 11, cursor: "pointer", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}
+                >⋯</button>
               </div>
               <span onClick={() => setMenuTab(cat.name)} style={{ fontSize: 11.5, fontWeight: isActive ? 800 : 600, color: isActive ? "var(--text, #1a1a2e)" : "var(--text-secondary, #6b6b7b)", cursor: "pointer", whiteSpace: "nowrap" }}>{cat.name}{count > 0 ? ` (${count})` : ""}</span>
             </div>
@@ -1453,24 +2058,57 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
         })}
       </div>
 
-      {editingCategoryId && (
-        <div className="card" style={{ padding: 20, marginBottom: 22, border: "2px dashed #e8a33d" }}>
-          <h3 style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 14 }}>Edit Category</h3>
-          <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 180 }}><label style={labelStyle}>Category Name</label><input className="to-input" value={editCategoryForm.name} onChange={(e) => setEditCategoryForm((p) => ({ ...p, name: e.target.value }))} /></div>
-            <div>
-              <label style={labelStyle}>Icon Photo</label>
-              <input ref={editCategoryFileInputRef} type="file" accept="image/*" onChange={(e) => handleEditCategoryImageUpload(e.target.files[0])} style={{ display: "none" }} />
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <button onClick={() => editCategoryFileInputRef.current?.click()} disabled={editCategoryUploading} className="btn btn-ghost btn-sm">{editCategoryUploading ? "..." : "Change"}</button>
-                {editCategoryForm.imageUrl && !editCategoryUploading && <img src={editCategoryForm.imageUrl} alt="" style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }} />}
-              </div>
+      {/* NEW: inline expansion panel — replaces the old floating ✎ / ✕ */}
+      {expandedCategoryId && (() => {
+        const cat = categories.find((c) => c.id === expandedCategoryId);
+        if (!cat) return null;
+        const itemsInCat = menuItems.filter((m) => m.category === cat.name);
+        return (
+          <div className="card" style={{ padding: 18, borderRadius: 14, marginBottom: 22, border: "2px dashed #e8a33d", animation: "riseIn 0.2s ease" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <h3 style={{ fontSize: 14.5, fontWeight: 800, margin: 0 }}>{cat.imageUrl ? "" : (cat.name === BAR_CATEGORY ? "🍸 " : "🍽️ ")}{cat.name}</h3>
+              <button onClick={() => setExpandedCategoryId(null)} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 16 }}>✕</button>
             </div>
-            <button className="btn btn-primary btn-sm" onClick={saveEditCategory}>Save</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => setEditingCategoryId(null)}>Cancel</button>
+
+            <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
+              <div style={{ flex: 1, minWidth: 180 }}>
+                <label style={labelStyle}>Category Name</label>
+                <input value={editCategoryForm.name} onChange={(e) => setEditCategoryForm((p) => ({ ...p, name: e.target.value }))} disabled={cat.name === COMBO_CATEGORY} style={{ ...inputStyle, marginBottom: 0 }} />
+              </div>
+              <div>
+                <label style={labelStyle}>Icon Photo</label>
+                <input ref={editCategoryFileInputRef} type="file" accept="image/*" onChange={(e) => handleEditCategoryImageUpload(e.target.files[0])} style={{ display: "none" }} />
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <button onClick={() => editCategoryFileInputRef.current?.click()} disabled={editCategoryUploading} className="btn btn-ghost btn-sm">{editCategoryUploading ? "..." : "Change"}</button>
+                  {editCategoryForm.imageUrl && !editCategoryUploading && <img src={editCategoryForm.imageUrl} alt="" style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }} />}
+                </div>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={() => saveEditCategory(cat)}>Save</button>
+              <button className="btn btn-sm" onClick={() => deleteCategory(cat)} style={{ background: "#fef2f2", color: "#dc2626", border: "none" }} disabled={cat.name === COMBO_CATEGORY}>Delete Category</button>
+            </div>
+
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#888", textTransform: "uppercase", marginBottom: 10 }}>Items in this category ({itemsInCat.length})</div>
+            {itemsInCat.length === 0 ? (
+              <p style={{ fontSize: 13, color: "#999" }}>No items yet.</p>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+                {itemsInCat.map((item) => (
+                  <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "var(--surface-2, #f3efe6)", borderRadius: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
+                      <div style={{ fontSize: 11, color: "#888" }}>₹{item.price}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <button onClick={() => startEdit(item)} className="btn btn-sm btn-ghost" style={{ padding: "4px 8px" }}>✎</button>
+                      <button onClick={() => deleteItem(item.id)} className="btn btn-sm btn-ghost" style={{ padding: "4px 8px", color: "#dc2626" }}>✕</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {filteredCategoryItems.length === 0 ? (
         <div className="card" style={{ padding: 48, textAlign: "center", color: "var(--text-secondary, #6b6b7b)", borderRadius: 16 }}>
@@ -1504,7 +2142,7 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
     </div>
   );
 
-    // === RENDER: TABLES ===
+  // === RENDER: TABLES ===
   const renderTables = () => {
     const useFloors = features.floors && floors.length > 0;
     const floorsToShow = useFloors ? floors : [{ id: null, name: "All Tables" }];
@@ -1513,12 +2151,19 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
           <div>
-            <h2 style={{ fontSize: 24, fontWeight: 800, margin: 0, fontFamily: "'Fraunces', serif" }}>Tables & QR Codes</h2>
-            <p style={{ fontSize: 13, color: "var(--text-secondary, #6b6b7b)", margin: "4px 0 0" }}>Print a code for each table — guests scan to open the menu.</p>
+            <h2 style={{ fontSize: 24, fontWeight: 800, margin: 0, fontFamily: "'Fraunces', serif" }}>Tables</h2>
+            <p style={{ fontSize: 13, color: "var(--text-secondary, #6b6b7b)", margin: "4px 0 0" }}>Green = free, red = occupied. Tap Print for a table's QR code.</p>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             {features.floors && <button className="btn btn-ghost" onClick={() => setShowAddFloor((s) => !s)}>{showAddFloor ? "Close" : "+ Add Floor"}</button>}
-            <button className="btn btn-primary" onClick={() => addTable(null)}>+ Add Table</button>
+            {mergeMode ? (
+              <>
+                <button className="btn btn-primary" onClick={confirmMerge}>Confirm Merge ({mergeSelected.length})</button>
+                <button className="btn btn-ghost" onClick={cancelMerge}>Cancel</button>
+              </>
+            ) : (
+              <button className="btn btn-primary" onClick={() => addTable(null)}>+ Add Table</button>
+            )}
           </div>
         </div>
 
@@ -1529,6 +2174,12 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
               <input placeholder="e.g. Ground Floor, Rooftop" value={newFloorName} onChange={(e) => setNewFloorName(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }} />
             </div>
             <button className="btn btn-primary" onClick={addFloor}>Add Floor</button>
+          </div>
+        )}
+
+        {mergeMode && (
+          <div style={{ background: "#eff6ff", color: "#1e40af", padding: "10px 16px", borderRadius: 10, fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
+            Merging into Table {tables.find((t) => t.id === mergePrimary)?.number}. Tap other tables to add them to the group, then Confirm Merge.
           </div>
         )}
 
@@ -1549,33 +2200,41 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
                     <button className="btn btn-sm btn-ghost" onClick={() => deleteFloor(floor)} style={{ color: "#dc2626" }}>Delete Floor</button>
                   </div>
                 )}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 18 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 14 }}>
                   {floorTables.map((t) => {
                     const activeCount = orders.filter((o) => o.table === t.number && !["paid", "cancelled", "declined", "merged"].includes(o.status)).length;
+                    const occupied = activeCount > 0;
+                    const isMergeSelectable = mergeMode && t.id !== mergePrimary;
+                    const isSelected = mergeSelected.includes(t.id);
                     return (
-                      <div key={t.id} className="card" style={{ borderRadius: 18, overflow: "hidden", border: t.isVIP ? "2px solid #eab308" : undefined }}>
-                        <div style={{ background: "#1a1a2e", color: "#fff", padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <span style={{ fontWeight: 800, fontSize: 15 }}>Table {t.number} {t.isVIP && <span style={{ color: "#eab308" }}>★</span>}</span>
-                          <span style={{ fontSize: 11, background: activeCount > 0 ? "rgba(34,197,94,0.25)" : "rgba(255,255,255,0.15)", padding: "3px 9px", borderRadius: 100, fontWeight: 700 }}>{activeCount > 0 ? `${activeCount} ACTIVE` : "FREE"}</span>
+                      <div key={t.id} className="card" onClick={() => { if (isMergeSelectable) toggleMergeSelect(t.id); }}
+                        style={{ borderRadius: 16, overflow: "hidden", border: `2px solid ${occupied ? "#dc2626" : "#16a34a"}`, cursor: isMergeSelectable ? "pointer" : "default", outline: isSelected ? "3px solid #7c3aed" : "none" }}>
+                        <div style={{ background: occupied ? "#dc2626" : "#16a34a", color: "#fff", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontWeight: 800, fontSize: 15 }}>Table {t.number} {t.isVIP && <span>★</span>}</span>
+                          <span style={{ fontSize: 10.5, background: "rgba(255,255,255,0.25)", padding: "3px 9px", borderRadius: 100, fontWeight: 700 }}>{occupied ? `${activeCount} ACTIVE` : "FREE"}</span>
                         </div>
-                        <div style={{ padding: 20, textAlign: "center" }}>
-                          {siteUrl && (
-                            <div style={{ background: "#fff", padding: 12, borderRadius: 14, display: "inline-block", boxShadow: "0 2px 10px rgba(0,0,0,0.06)" }}>
-                              <img src={qrUrlFor(t.number)} alt={`QR table ${t.number}`} style={{ width: 140, height: 140, display: "block" }} />
+                        <div style={{ padding: 16, textAlign: "center" }}>
+                          {t.isMerged && (
+                            <div style={{ background: "#ede9fe", color: "#6d28d9", fontSize: 11, fontWeight: 700, padding: "4px 8px", borderRadius: 8, marginBottom: 10 }}>
+                              Merged with {(t.mergedWith || []).join(", ")}
+                              <button onClick={(e) => { e.stopPropagation(); unmergeTable(t); }} style={{ marginLeft: 8, background: "none", border: "none", color: "#6d28d9", textDecoration: "underline", cursor: "pointer", fontSize: 11 }}>Unmerge</button>
                             </div>
                           )}
                           {features.vipTables && (
-                            <button onClick={() => toggleVip(t)} className="btn btn-sm" style={{ width: "100%", marginTop: 14, background: t.isVIP ? "#fef3c7" : "var(--surface-2, #f3efe6)", color: t.isVIP ? "#92400e" : "#888", border: "none" }}>
+                            <button onClick={(e) => { e.stopPropagation(); toggleVip(t); }} className="btn btn-sm" style={{ width: "100%", marginBottom: 8, background: t.isVIP ? "#fef3c7" : "var(--surface-2, #f3efe6)", color: t.isVIP ? "#92400e" : "#888", border: "none" }}>
                               {t.isVIP ? "★ VIP Table" : "Mark as VIP"}
                             </button>
                           )}
-                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                            <button className="btn btn-sm btn-ghost" onClick={() => printQr(t.number)} style={{ flex: 1 }}>Print</button>
-                            <button className="btn btn-sm btn-ghost" onClick={() => deleteTable(t.id)} style={{ flex: 1, color: "var(--danger, #dc2626)" }}>Delete</button>
+                          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                            <button onClick={(e) => { e.stopPropagation(); setQrModalTable(t); }} className="btn btn-sm btn-ghost" style={{ flex: 1 }}>Print QR</button>
+                            {!mergeMode && !t.isMerged && (
+                              <button onClick={(e) => { e.stopPropagation(); startMerge(t.id); }} className="btn btn-sm btn-ghost" style={{ flex: 1 }}>Merge</button>
+                            )}
+                            <button onClick={(e) => { e.stopPropagation(); deleteTable(t.id); }} className="btn btn-sm btn-ghost" style={{ flex: 1, color: "var(--danger, #dc2626)" }}>Delete</button>
                           </div>
-                          {activeCount > 0 && (
-                            <button onClick={() => freeTable(t.number)} className="btn btn-sm" style={{ width: "100%", marginTop: 8, background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca" }}>
-                              Free Table ({activeCount} active order{activeCount > 1 ? "s" : ""})
+                          {occupied && (
+                            <button onClick={(e) => { e.stopPropagation(); freeTable(t.number); }} className="btn btn-sm" style={{ width: "100%", background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca" }}>
+                              Free Table
                             </button>
                           )}
                         </div>
@@ -1596,7 +2255,7 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
     <div>
       <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 24, fontFamily: "'Fraunces', serif" }}>Settings</h2>
 
-      {/* Flat full-width logo box (replaces old circular-logo header) */}
+      {/* Flat full-width logo box */}
       <div className="card" style={{ borderRadius: 20, overflow: "hidden", marginBottom: 24 }}>
         <div style={{
           height: 180, position: "relative",
@@ -1625,6 +2284,42 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
 
           <button className="btn btn-primary" onClick={saveProfile} style={{ width: "100%" }}>{savedMsg ? "Saved ✓" : "Save Profile"}</button>
         </div>
+      </div>
+
+      {/* NEW: Subscription card */}
+      <div className="card" style={{ padding: 24, borderRadius: 18, marginBottom: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Your Plan</h3>
+            <p style={{ fontSize: 12.5, color: "var(--text-secondary, #6b6b7b)", margin: 0 }}>{features?.planName || "Base"} plan — manage or upgrade anytime.</p>
+          </div>
+          <span style={{ background: "#1a1a2e", color: "#fff", fontSize: 12, fontWeight: 800, padding: "6px 14px", borderRadius: 100 }}>{(features?.planName || "BASE").toUpperCase()}</span>
+        </div>
+        <button className="btn btn-ghost" style={{ marginTop: 16 }} onClick={() => alert("Upgrade flow: contact support or use the in-app UPI upgrade QR once billing automation is wired up.")}>Upgrade Plan</button>
+      </div>
+
+      {/* NEW: Bar toggle + badge thresholds */}
+      <div className="card" style={{ padding: 24, borderRadius: 18, marginBottom: 24 }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Menu Intelligence</h3>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13.5, fontWeight: 600, cursor: "pointer", marginBottom: 18 }}>
+          <input type="checkbox" checked={!!siteSettingsForm.hasBar} onChange={(e) => setSiteSettingsForm((p) => ({ ...p, hasBar: e.target.checked }))} />
+          🍸 This restaurant runs a Bar section
+        </label>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+          <div>
+            <label style={labelStyle}>Most Loved at ★</label>
+            <input type="number" step="0.1" value={siteSettingsForm.thresholdMostLoved} onChange={(e) => setSiteSettingsForm((p) => ({ ...p, thresholdMostLoved: e.target.value }))} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Most Ordered at (orders)</label>
+            <input type="number" value={siteSettingsForm.thresholdMostOrdered} onChange={(e) => setSiteSettingsForm((p) => ({ ...p, thresholdMostOrdered: e.target.value }))} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Most Rated at (reviews)</label>
+            <input type="number" value={siteSettingsForm.thresholdMostRated} onChange={(e) => setSiteSettingsForm((p) => ({ ...p, thresholdMostRated: e.target.value }))} style={inputStyle} />
+          </div>
+        </div>
+        <button className="btn btn-primary" onClick={saveSiteSettings} style={{ marginTop: 14 }}>{siteSettingsSaved ? "Saved ✓" : "Save Settings"}</button>
       </div>
 
       {/* Billing + Staff side by side */}
@@ -1680,28 +2375,6 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
           )}
         </div>
       </div>
-
-      {/* Promo banner — shown at bottom of customer table page */}
-      {features.promoBanner && (
-        <div className="card" style={{ padding: 24, borderRadius: 18, maxWidth: 460 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Exclusive Deal Banner</h3>
-          <p style={{ fontSize: 12.5, color: "var(--text-secondary, #6b6b7b)", marginBottom: 16 }}>Shown at the bottom of the customer menu. Optionally link it to a menu item/combo so tapping it adds that item to the cart.</p>
-          <label style={labelStyle}>Banner Title</label>
-          <input placeholder="e.g. 30% off combos this week" value={promoForm.title} onChange={(e) => setPromoForm((p) => ({ ...p, title: e.target.value }))} style={inputStyle} />
-          <label style={labelStyle}>Banner Image</label>
-          <input ref={promoFileInputRef} type="file" accept="image/*" onChange={(e) => handlePromoImageUpload(e.target.files[0])} style={{ display: "none" }} />
-          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
-            <button onClick={() => promoFileInputRef.current?.click()} disabled={promoUploading} className="btn btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>{promoUploading ? "Uploading..." : "Upload Photo"}</button>
-            {promoForm.imageUrl && !promoUploading && <img src={promoForm.imageUrl} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: "cover" }} />}
-          </div>
-          <label style={labelStyle}>Link to item/combo (optional)</label>
-          <select value={promoForm.linkedItemId} onChange={(e) => setPromoForm((p) => ({ ...p, linkedItemId: e.target.value }))} style={inputStyle}>
-            <option value="">No link — image only</option>
-            {menuItems.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-          <button className="btn btn-primary" onClick={savePromoBanner}>{promoSaved ? "Saved ✓" : "Save Banner"}</button>
-        </div>
-      )}
     </div>
   );
 
@@ -1750,6 +2423,38 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
     </div>
   );
 
+  // === NEW: QR modal ===
+  const qrModal = qrModalTable && (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setQrModalTable(null)}>
+      <div style={{ background: "#fff", borderRadius: 20, padding: 28, maxWidth: 320, width: "90%", textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>Table {qrModalTable.number}</h3>
+        {siteUrl && <img src={qrUrlFor(qrModalTable.number)} alt="" style={{ width: 200, height: 200, marginBottom: 16 }} />}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-ghost" onClick={() => setQrModalTable(null)} style={{ flex: 1 }}>Close</button>
+          <button className="btn btn-primary" onClick={() => printQr(qrModalTable.number)} style={{ flex: 1 }}>Print</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // === NEW: Move order modal ===
+  const moveOrderModal = movingOrder && (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setMovingOrder(null)}>
+      <div style={{ background: "#fff", borderRadius: 20, padding: 28, maxWidth: 320, width: "90%" }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>Move Order — Table {movingOrder.table}</h3>
+        <label style={labelStyle}>New Table</label>
+        <select value={moveTargetTable} onChange={(e) => setMoveTargetTable(e.target.value)} style={inputStyle}>
+          <option value="">Select table</option>
+          {tables.filter((t) => t.number !== movingOrder.table).map((t) => <option key={t.id} value={t.number}>Table {t.number}</option>)}
+        </select>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-ghost" onClick={() => setMovingOrder(null)} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn btn-primary" onClick={confirmMoveOrder} style={{ flex: 1 }}>Move</button>
+        </div>
+      </div>
+    </div>
+  );
+
   // === RETURN ===
   return (
     <div style={{ display: "flex", minHeight: "100vh", fontFamily: "'Inter', sans-serif" }}>
@@ -1780,6 +2485,8 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
       {showSplash && renderSplash()}
       {floorPickerModal}
       {splitBillModal}
+      {qrModal}
+      {moveOrderModal}
 
       {isMobile && sidebarOpen && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 99 }} onClick={() => setSidebarOpen(false)} />}
 
@@ -1807,8 +2514,8 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
             <button key={tab.id} onClick={() => { setActiveTab(tab.id); setDashboardView("main"); if (isMobile) setSidebarOpen(false); }}
               style={{ width: "100%", textAlign: "left", padding: sidebarCollapsed && !isMobile ? "12px 0" : "12px 16px", justifyContent: sidebarCollapsed && !isMobile ? "center" : "flex-start", borderRadius: 10, border: "none", background: activeTab === tab.id ? "rgba(91,155,213,0.18)" : "transparent", color: activeTab === tab.id ? "#5B9BD5" : "rgba(255,255,255,0.75)", fontSize: 14.5, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", gap: 12, transition: "all 0.15s ease", position: "relative" }}>
               {(!sidebarCollapsed || isMobile) ? tab.label : tab.label.charAt(0)}
-              {tab.id === "dashboard" && (pending.length + billRequested.length > 0) && (
-                <span style={{ marginLeft: sidebarCollapsed && !isMobile ? 0 : "auto", position: sidebarCollapsed && !isMobile ? "absolute" : "static", top: sidebarCollapsed && !isMobile ? 6 : "auto", right: sidebarCollapsed && !isMobile ? 10 : "auto", background: "#dc2626", color: "#fff", fontSize: 10.5, fontWeight: 800, padding: "2px 7px", borderRadius: 100 }}>{pending.length + billRequested.length}</span>
+              {tab.id === "dashboard" && (pending.length + billRequested.length + pendingWaiterCalls.length > 0) && (
+                <span style={{ marginLeft: sidebarCollapsed && !isMobile ? 0 : "auto", position: sidebarCollapsed && !isMobile ? "absolute" : "static", top: sidebarCollapsed && !isMobile ? 6 : "auto", right: sidebarCollapsed && !isMobile ? 10 : "auto", background: "#dc2626", color: "#fff", fontSize: 10.5, fontWeight: 800, padding: "2px 7px", borderRadius: 100 }}>{pending.length + billRequested.length + pendingWaiterCalls.length}</span>
               )}
             </button>
           ))}
@@ -1832,6 +2539,7 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
         )}
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: isMobile ? "20px" : "32px" }}>
           {activeTab === "dashboard" && renderDashboard()}
+          {activeTab === "pos" && renderPOS()}
           {activeTab === "menu" && renderMenu()}
           {activeTab === "tables" && renderTables()}
           {activeTab === "settings" && renderSettings()}

@@ -1,30 +1,36 @@
 "use client";
-// REPLACES your existing app/table/page.js entirely.
+// FINAL REDESIGN — table-side customer menu, matching the Oak Restro reference layout.
 //
-// What changed vs your original:
-// 1. Cart is now keyed by "line" not just item id — a plain quick-add and a
-//    customised (notes/spice) add of the same dish are separate lines, so
-//    quantities don't collide.
-// 2. New ItemDetailModal — tapping a dish name/description opens a popup with
-//    the full description + a small "Customise" link tucked at the bottom
-//    (hidden, not a prominent button) that reveals spice-level + notes fields.
-// 3. New RatingPopup — auto-detected when an order flips to "paid", shows for
-//    10s then disappears on its own (or on skip / rating). Does NOT block the
-//    table from taking a new order — that already happens instantly since
-//    "paid" orders are excluded from activeOrders.
-// 4. Veg / Non-veg filter toggle in the header.
-// 5. Promo banner block at the bottom of the menu screen (receptionist sets
-//    the image + linked item in Settings — see receptionist/page.js changes).
-// 6. Header redesigned: logo replaces the old hamburger position, search bar
-//    sits to its right in the same row (no notification bell / cart icon up
-//    top — the cart is still the sticky bottom bar you already had).
+// Changes vs the previous version:
+// 1. Header rebuilt to match reference: Call Waiter icon (top-left, replaces the
+//    hamburger slot) + logo/name/tagline, "Table N" pill (top-right, replaces the
+//    bell slot) — still NO hamburger menu and NO notification bell, per spec.
+//    Order-status is still handled entirely by the bottom cart/status bar.
+// 2. NEW: Call Waiter — bottom-sheet with preset reasons (Water, Tissues, Cutlery,
+//    Seasoning, Something else) that writes to `restaurants/{id}/waiterCalls`.
+// 3. NEW: Spotlight card — a single large "Most Loved / Most Ordered / Most Rated"
+//    feature card sits between the category pills and Popular Picks. Which metric
+//    it spotlights is configurable by the receptionist (info/settings.spotlightMetric),
+//    matching the "one more threshold" ask.
+// 4. "What are you craving" chip row + Bestseller dropdown: REMOVED (per spec).
+// 5. Explore filter: added a "Most Rated" option alongside Most Loved / Most Ordered.
+// 6. NEW: Dine-in / Takeaway toggle in the cart summary sheet — stored as
+//    `order.orderType`. (Kitchen-side "PACK FOR TAKEAWAY" ticket badge is an
+//    admin-side change, coming in the next phase along with POS + Bar.)
+// 7. Hero banner stays image-only, full width, carousel — no text overlay, per spec.
+// 8. Category pills, ratings, recommendation banners, promo banner placement,
+//    Google-review thank-you flow: unchanged from the last pass.
+//
+// Firestore fields this page expects to exist (maintained elsewhere — reception
+// dashboard / a future aggregation job, not by this file):
+//   menuItems/{id}: averageRating, reviewCount, mostLoved, mostOrdered, mostRated
+//   info/settings: googleReviewLink, spotlightMetric ("mostLoved"|"mostOrdered"|"mostRated")
+// This file reads them defensively — everything degrades gracefully if absent.
 
-import { Suspense, useEffect, useState, useRef } from "react";
+import { Suspense, useEffect, useState, useRef, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { db } from "@/lib/firebase";
-import {
-  collection, addDoc, updateDoc, doc, onSnapshot, query, where, orderBy, writeBatch,
-} from "firebase/firestore";
+import { collection, addDoc, updateDoc, doc, onSnapshot, query, where, orderBy, writeBatch } from "firebase/firestore";
 
 const POPULAR_LIMIT = 8;
 const DISPLAY_FONT = "'Anton', sans-serif";
@@ -42,14 +48,29 @@ const CATEGORY_ICONS = {
   "Live Counter": "👨‍🍳", Combos: "🍱", "Combo Packs": "🍱", "Kids Menu": "🧒",
 };
 
+const MEAL_COMPLETION_RULES = {
+  "Mains": { needs: ["Breads & Rice", "Bread", "Rice", "Breads"], suggestCategory: "Breads & Rice" },
+  "Main Course": { needs: ["Breads & Rice", "Bread", "Rice", "Breads"], suggestCategory: "Breads & Rice" },
+  "North Indian": { needs: ["Breads & Rice", "Bread", "Rice", "Breads"], suggestCategory: "Breads & Rice" },
+  "Biryani": { needs: ["Beverages", "Drinks", "Mocktails"], suggestCategory: "Beverages" },
+  "Starters": { needs: ["Mains", "Main Course", "North Indian", "Chinese"], suggestCategory: "Mains" },
+  "Chinese": { needs: ["Beverages", "Drinks"], suggestCategory: "Beverages" },
+  "Indo Chinese": { needs: ["Beverages", "Drinks"], suggestCategory: "Beverages" },
+};
+
+const WAITER_REASONS = [
+  { key: "water", icon: "💧", label: "Water" },
+  { key: "tissues", icon: "🧻", label: "Tissues" },
+  { key: "cutlery", icon: "🍴", label: "Cutlery" },
+  { key: "seasoning", icon: "🧂", label: "Seasoning / Condiments" },
+  { key: "other", icon: "✋", label: "Something else" },
+];
+
 function getCategoryIcon(cat, categoryIconMap) {
   if (categoryIconMap && categoryIconMap[cat]) return { type: "image", src: categoryIconMap[cat] };
   return { type: "emoji", value: CATEGORY_ICONS[cat] || "🍴" };
 }
 
-// ---------------------------------------------------------------------------
-// Audio
-// ---------------------------------------------------------------------------
 let _audioCtx = null;
 function getAudioCtx() {
   if (typeof window === "undefined") return null;
@@ -85,12 +106,8 @@ function playChime() {
   setTimeout(() => playTone(1040, 220, "triangle"), 260);
 }
 
-// ---------------------------------------------------------------------------
-// Global CSS
-// ---------------------------------------------------------------------------
 const GLOBAL_ANIMATION_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800&display=swap');
-
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
@@ -107,31 +124,37 @@ const GLOBAL_ANIMATION_CSS = `
   @keyframes layerDrop { 0% { opacity: 0; transform: translateY(-50px) rotate(-8deg); } 60% { opacity: 1; transform: translateY(6px) rotate(3deg); } 100% { opacity: 1; transform: translateY(0) rotate(0deg); } }
   @keyframes modalScaleIn { from { opacity: 0; transform: scale(0.9) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
   @keyframes starPulse { 0% { transform: scale(1); } 50% { transform: scale(1.3); } 100% { transform: scale(1); } }
-
+  @keyframes recSlideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
   .tap-btn { transition: transform 0.12s ease, filter 0.12s ease; }
   .tap-btn:active { transform: scale(0.94); filter: brightness(0.97); }
   .cart-bump { display: inline-flex; animation: bump 0.4s ease; }
-  .menu-card-plus-float {
-    position: absolute; top: 10px; right: 10px; background: #1a1a2e; color: #fff;
-    font-size: 12px; font-weight: 800; padding: 2px 9px; border-radius: 100px;
-    animation: floatUp 0.7s ease forwards; pointer-events: none; z-index: 3;
-  }
+  .menu-card-plus-float { position: absolute; top: 10px; right: 10px; background: #1a1a2e; color: #fff; font-size: 12px; font-weight: 800; padding: 2px 9px; border-radius: 100px; animation: floatUp 0.7s ease forwards; pointer-events: none; z-index: 3; }
+  .rec-banner { animation: recSlideIn 0.4s cubic-bezier(0.22,1,0.36,1); }
+  .shimmer-bg { background: linear-gradient(90deg, #fef3c7 25%, #fde68a 50%, #fef3c7 75%); background-size: 200% 100%; animation: shimmer 2s infinite; }
 `;
 
 // ---------------------------------------------------------------------------
-// Small components
+// Small shared pieces
 // ---------------------------------------------------------------------------
 function VegBadge({ foodType }) {
   if (!foodType) return null;
   const isVeg = foodType === "veg";
   return (
-    <span title={isVeg ? "Veg" : "Non-veg"} style={{
-      display: "inline-block", width: 13, height: 13, border: `1.5px solid ${isVeg ? "#16a34a" : "#dc2626"}`,
-      borderRadius: 3, position: "relative", flexShrink: 0,
-    }}>
-      <span style={{
-        position: "absolute", inset: 2, borderRadius: "50%", background: isVeg ? "#16a34a" : "#dc2626",
-      }} />
+    <span title={isVeg ? "Veg" : "Non-veg"} style={{ display: "inline-block", width: 13, height: 13, border: `1.5px solid ${isVeg ? "#16a34a" : "#dc2626"}`, borderRadius: 3, position: "relative", flexShrink: 0 }}>
+      <span style={{ position: "absolute", inset: 2, borderRadius: "50%", background: isVeg ? "#16a34a" : "#dc2626" }} />
+    </span>
+  );
+}
+
+function RatingBadge({ rating, count, size = "sm" }) {
+  if (!rating && !count) return null;
+  const isSmall = size === "sm";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, background: "#dcfce7", color: "#166534", padding: isSmall ? "2px 7px" : "3px 10px", borderRadius: 100, fontSize: isSmall ? 10.5 : 12, fontWeight: 700 }}>
+      <span style={{ color: "#16a34a" }}>★</span>
+      {rating ? rating.toFixed(1) : "New"}
+      {count ? <span style={{ color: "#86efac", fontWeight: 500 }}>({count >= 1000 ? (count / 1000).toFixed(1) + "k" : count})</span> : null}
     </span>
   );
 }
@@ -147,10 +170,7 @@ function MenuCard({ item, qty, onAdd, onOpenDetail, width }) {
     onAdd();
   }
   return (
-    <div
-      onClick={() => onOpenDetail(item)}
-      style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,0.06)", border: "1px solid #f0f0f0", flexShrink: width ? 0 : undefined, width: width || "auto", cursor: "pointer" }}
-    >
+    <div onClick={() => onOpenDetail(item)} style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,0.06)", border: "1px solid #f0f0f0", flexShrink: width ? 0 : undefined, width: width || "auto", cursor: "pointer", position: "relative" }}>
       <div style={{ position: "relative", height: 140, background: "#f8f6f3" }}>
         {item.imageUrl ? (
           <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="eager" />
@@ -160,20 +180,83 @@ function MenuCard({ item, qty, onAdd, onOpenDetail, width }) {
         {item.isCombo && (
           <span style={{ position: "absolute", top: 8, left: 8, background: "#1a1a2e", color: "#fff", fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 100 }}>COMBO</span>
         )}
+        {item.mostLoved && (
+          <span style={{ position: "absolute", top: 8, right: 8, background: "#dc2626", color: "#fff", fontSize: 9, fontWeight: 800, padding: "2px 7px", borderRadius: 100 }}>🔥 Most Loved</span>
+        )}
+        {item.mostOrdered && !item.mostLoved && (
+          <span style={{ position: "absolute", top: 8, right: 8, background: "#e8a33d", color: "#1a1a2e", fontSize: 9, fontWeight: 800, padding: "2px 7px", borderRadius: 100 }}>🔥 Most Ordered</span>
+        )}
+        {item.mostRated && !item.mostLoved && !item.mostOrdered && (
+          <span style={{ position: "absolute", top: 8, right: 8, background: "#16a34a", color: "#fff", fontSize: 9, fontWeight: 800, padding: "2px 7px", borderRadius: 100 }}>⭐ Most Rated</span>
+        )}
         {pulses.map((id) => (<span key={id} className="menu-card-plus-float">+1</span>))}
         <button onClick={handleAdd} className="tap-btn" style={{ position: "absolute", bottom: -16, right: 12, width: 36, height: 36, borderRadius: "50%", border: "none", background: "#e8a33d", color: "#fff", fontSize: 20, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 8px rgba(232,163,61,0.4)" }}>+</button>
       </div>
       <div style={{ padding: "20px 12px 12px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
           <VegBadge foodType={item.foodType} />
-          <div style={{ fontWeight: 700, fontSize: 14, color: "#1a1a2e", lineHeight: 1.3 }}>{item.name}</div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "#1a1a2e", lineHeight: 1.3, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
         </div>
         <div style={{ fontSize: 11.5, color: "#999", marginBottom: 8, lineHeight: 1.3, minHeight: 15 }}>
           {item.description?.slice(0, 26)}{item.description?.length > 26 ? "…" : ""}
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontWeight: 800, fontSize: 16, color: "#e8a33d" }}>₹{item.price}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontWeight: 800, fontSize: 16, color: "#e8a33d" }}>₹{item.price}</span>
+            {(item.averageRating || item.reviewCount) && (
+              <RatingBadge rating={item.averageRating} count={item.reviewCount} />
+            )}
+          </div>
           {qty > 0 && (<span style={{ background: "#1a1a2e", color: "#fff", padding: "2px 10px", borderRadius: 100, fontSize: 12, fontWeight: 700 }}>{qty}</span>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Spotlight card — the single large feature between category pills & Popular
+// Picks, matching the reference layout. Which metric it spotlights is set by
+// the receptionist (info/settings.spotlightMetric).
+function SpotlightCard({ item, metric, onAdd }) {
+  if (!item) return null;
+  const badge = metric === "mostOrdered"
+    ? { icon: "🔥", label: "Most Ordered" }
+    : metric === "mostRated"
+      ? { icon: "⭐", label: "Most Rated" }
+      : { icon: "🔥", label: "Most Loved" };
+
+  return (
+    <div style={{ padding: "0 20px 22px" }}>
+      <div style={{ background: "#fff", borderRadius: 20, padding: 16, border: "1px solid #f0f0f0", boxShadow: "0 4px 20px rgba(0,0,0,0.05)", display: "flex", gap: 16 }}>
+        <div style={{ position: "relative", width: 128, height: 128, borderRadius: 16, overflow: "hidden", flexShrink: 0, background: "#f8f6f3" }}>
+          {item.imageUrl ? (
+            <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          ) : (
+            <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36 }}>🍽️</div>
+          )}
+          <span style={{ position: "absolute", top: 8, left: 8, background: "#fff5e0", color: "#92400e", fontSize: 9.5, fontWeight: 800, padding: "3px 8px", borderRadius: 100, display: "flex", alignItems: "center", gap: 3, boxShadow: "0 2px 6px rgba(0,0,0,0.1)" }}>
+            {badge.icon} {badge.label}
+          </span>
+        </div>
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <VegBadge foodType={item.foodType} />
+            <div style={{ fontWeight: 800, fontSize: 16, color: "#1a1a2e", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
+          </div>
+          {item.description && (
+            <div style={{ fontSize: 12, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+              {item.description.slice(0, 62)}{item.description.length > 62 ? "…" : ""}
+            </div>
+          )}
+          <div style={{ marginTop: "auto", display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontWeight: 800, fontSize: 17, color: "#e8a33d" }}>₹{item.price}</span>
+              {(item.averageRating || item.reviewCount) && <RatingBadge rating={item.averageRating} count={item.reviewCount} />}
+            </div>
+            <button onClick={() => onAdd(item.id, 1)} className="tap-btn" style={{ padding: "9px 20px", borderRadius: 10, border: "none", background: "#e8a33d", color: "#1a1a2e", fontWeight: 800, fontSize: 13, cursor: "pointer", flexShrink: 0 }}>
+              Add +
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -190,12 +273,17 @@ function ItemDetailModal({ item, onClose, onAdd }) {
       <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: "24px 24px 0 0", width: "100%", maxWidth: 480, maxHeight: "85vh", overflowY: "auto", padding: 24, animation: "modalScaleIn 0.3s cubic-bezier(0.22,1,0.36,1)" }}>
         {item.imageUrl && <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: 180, objectFit: "cover", borderRadius: 16, marginBottom: 16 }} />}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <VegBadge foodType={item.foodType} />
               <div style={{ fontSize: 20, fontWeight: 800 }}>{item.name}</div>
             </div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#e8a33d", marginTop: 4 }}>₹{item.price}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#e8a33d" }}>₹{item.price}</div>
+              {(item.averageRating || item.reviewCount) && (
+                <RatingBadge rating={item.averageRating} count={item.reviewCount} size="md" />
+              )}
+            </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: "#888" }}>×</button>
         </div>
@@ -238,27 +326,120 @@ function ItemDetailModal({ item, onClose, onAdd }) {
   );
 }
 
-function RatingPopup({ order, restaurantId, onDone }) {
+// Call Waiter — bottom sheet with preset reasons. Writes a lightweight doc
+// reception can see live; doesn't touch the order/kitchen pipeline at all.
+function WaiterModal({ onClose, onSend }) {
+  const [selected, setSelected] = useState(null);
+  const [customText, setCustomText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  const canSend = selected && (selected !== "other" || customText.trim().length > 0);
+
+  async function handleSend() {
+    if (!canSend || sending) return;
+    setSending(true);
+    const reason = selected === "other"
+      ? customText.trim()
+      : WAITER_REASONS.find((r) => r.key === selected)?.label || "Assistance";
+    await onSend(reason);
+    setSending(false);
+    setSent(true);
+    setTimeout(onClose, 1700);
+  }
+
+  if (sent) {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 260, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+        <div style={{ background: "#fff", borderRadius: "24px 24px 0 0", width: "100%", maxWidth: 480, padding: "36px 24px", textAlign: "center", animation: "modalScaleIn 0.3s cubic-bezier(0.22,1,0.36,1)" }}>
+          <div style={{ fontSize: 40, marginBottom: 10 }}>🛎️</div>
+          <div style={{ fontSize: 17, fontWeight: 800, color: "#1a1a2e" }}>A staff member is on the way!</div>
+          <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>Thanks for letting us know.</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 260, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: "24px 24px 0 0", width: "100%", maxWidth: 480, padding: 24, animation: "modalScaleIn 0.3s cubic-bezier(0.22,1,0.36,1)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <h3 style={{ fontSize: 18, fontWeight: 800, margin: 0 }}>Call a waiter</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: "#888" }}>×</button>
+        </div>
+        <p style={{ fontSize: 13, color: "#888", marginTop: 2, marginBottom: 18 }}>What do you need at your table?</p>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 16 }}>
+          {WAITER_REASONS.map((r) => (
+            <button key={r.key} onClick={() => setSelected(r.key)} className="tap-btn"
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 12px", borderRadius: 14, cursor: "pointer", textAlign: "left",
+                border: selected === r.key ? "2px solid #e8a33d" : "1px solid #eee",
+                background: selected === r.key ? "#fff5e0" : "#fff" }}>
+              <span style={{ fontSize: 18 }}>{r.icon}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#1a1a2e" }}>{r.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {selected === "other" && (
+          <input value={customText} onChange={(e) => setCustomText(e.target.value)} placeholder="Tell us what you need..."
+            style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid #ddd", fontSize: 14, marginBottom: 16, boxSizing: "border-box" }} autoFocus />
+        )}
+
+        <button onClick={handleSend} disabled={!canSend || sending} className="tap-btn"
+          style={{ width: "100%", padding: 15, borderRadius: 14, border: "none", background: canSend ? "#1a1a2e" : "#eee", color: canSend ? "#fff" : "#aaa", fontWeight: 700, fontSize: 15, cursor: canSend ? "pointer" : "not-allowed" }}>
+          {sending ? "Sending..." : "🛎️ Call Waiter"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RatingPopup({ order, restaurantId, onDone, googleReviewLink }) {
   const [rating, setRating] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(10);
+  const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
       setSecondsLeft((s) => {
-        if (s <= 1) { clearInterval(interval); onDone(); return 0; }
+        if (s <= 1) { clearInterval(interval); if (!submitted) onDone(); return 0; }
         return s - 1;
       });
     }, 1000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [submitted, onDone]);
 
   async function submitRating(stars) {
     setRating(stars);
     try {
       await updateDoc(doc(db, "restaurants", restaurantId, "orders", order.id), { rating: { stars, ratedAt: Date.now() } });
     } catch {}
-    setTimeout(onDone, 600);
+    setSubmitted(true);
+  }
+
+  if (submitted) {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", animation: "fadeIn 0.25s ease" }}>
+        <div style={{ background: "#fff", borderRadius: 24, padding: 32, textAlign: "center", maxWidth: 320, animation: "modalScaleIn 0.35s cubic-bezier(0.22,1,0.36,1)" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🙏</div>
+          <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 6 }}>Thank you so much!</div>
+          <div style={{ fontSize: 13, color: "#888", marginBottom: 20, lineHeight: 1.5 }}>
+            We hope you had a wonderful time with us.<br />Have a great day! 🌟
+          </div>
+          {googleReviewLink && (
+            <>
+              <div style={{ fontSize: 12, color: "#aaa", marginBottom: 12 }}>Loved our service?</div>
+              <a href={googleReviewLink} target="_blank" rel="noopener noreferrer"
+                style={{ display: "inline-block", padding: "12px 24px", borderRadius: 14, background: "#1a1a2e", color: "#fff", fontWeight: 700, fontSize: 14, textDecoration: "none", marginBottom: 12 }}>
+                ⭐ Rate us on Google
+              </a>
+            </>
+          )}
+          <button onClick={onDone} style={{ background: "none", border: "none", color: "#aaa", fontSize: 13, cursor: "pointer", display: "block", margin: "0 auto" }}>Close</button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -299,6 +480,127 @@ function StatusToast({ emoji, msg }) {
 }
 
 // ---------------------------------------------------------------------------
+// Recommendation banners (unchanged logic from the previous pass)
+// ---------------------------------------------------------------------------
+function PeopleAlsoOrderedBanner({ cart, menuItems, onAdd }) {
+  const cartItemIds = new Set(Object.values(cart).map((l) => l.itemId));
+  const cartCategories = new Set();
+  cartItemIds.forEach((id) => {
+    const item = menuItems.find((m) => m.id === id);
+    if (item) cartCategories.add(item.category);
+  });
+
+  const suggestions = menuItems.filter((m) => {
+    if (cartItemIds.has(m.id)) return false;
+    if (!m.available) return false;
+    return cartCategories.has(m.category) || (m.featured && Math.random() > 0.5);
+  }).slice(0, 3);
+
+  if (suggestions.length === 0) return null;
+
+  return (
+    <div className="rec-banner" style={{ margin: "0 20px 20px", background: "linear-gradient(135deg, #fef3c7 0%, #fff5e0 100%)", borderRadius: 16, padding: 16, border: "1px solid #fde68a" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+        <span style={{ fontSize: 16 }}>👥</span>
+        <span style={{ fontSize: 13, fontWeight: 800, color: "#92400e" }}>People also ordered these</span>
+      </div>
+      <div style={{ display: "flex", gap: 10, overflowX: "auto" }}>
+        {suggestions.map((item) => (
+          <div key={item.id} onClick={() => onAdd(item.id, 1)} className="tap-btn" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10, background: "#fff", borderRadius: 12, padding: "8px 12px", border: "1px solid #f0f0f0", cursor: "pointer", minWidth: 180 }}>
+            {item.imageUrl && <img src={item.imageUrl} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover" }} />}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
+              <div style={{ fontSize: 11, color: "#e8a33d", fontWeight: 700 }}>₹{item.price}</div>
+            </div>
+            <span style={{ background: "#e8a33d", color: "#1a1a2e", fontSize: 16, fontWeight: 700, width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>+</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CompleteMealBanner({ cart, menuItems, onAdd }) {
+  const cartItemIds = new Set(Object.values(cart).map((l) => l.itemId));
+  const cartItems = menuItems.filter((m) => cartItemIds.has(m.id));
+
+  let missingCategory = null;
+  for (const item of cartItems) {
+    const rule = MEAL_COMPLETION_RULES[item.category];
+    if (rule) {
+      const hasComplement = cartItems.some((m) => rule.needs.includes(m.category));
+      if (!hasComplement) {
+        missingCategory = rule.suggestCategory;
+        break;
+      }
+    }
+  }
+
+  if (!missingCategory) return null;
+
+  const suggestion = menuItems.find((m) => m.category === missingCategory && m.available && !cartItemIds.has(m.id));
+  if (!suggestion) return null;
+
+  return (
+    <div className="rec-banner" style={{ margin: "0 20px 20px", background: "linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%)", borderRadius: 16, padding: 16, border: "1px solid #bbf7d0" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+          {suggestion.imageUrl && <img src={suggestion.imageUrl} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: "cover" }} />}
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#166534" }}>🍽️ Complete your meal</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e", marginTop: 2 }}>{suggestion.name} — ₹{suggestion.price}</div>
+            <div style={{ fontSize: 11, color: "#888" }}>Pairs perfectly with what you ordered</div>
+          </div>
+        </div>
+        <button onClick={() => onAdd(suggestion.id, 1)} className="tap-btn" style={{ padding: "8px 16px", borderRadius: 10, border: "none", background: "#16a34a", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", flexShrink: 0 }}>
+          + Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ThresholdBanner({ cartTotal, activeOffer, onAdd }) {
+  if (!activeOffer || !activeOffer.active) return null;
+  const remaining = (activeOffer.threshold || 0) - cartTotal;
+  if (remaining <= 0) {
+    return (
+      <div className="rec-banner" style={{ margin: "0 20px 20px", background: "linear-gradient(135deg, #ede9fe 0%, #f5f3ff 100%)", borderRadius: 16, padding: 16, border: "1px solid #ddd6fe" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 20 }}>🎉</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#6d28d9" }}>You unlocked a FREE {activeOffer.freeItemName || "treat"}!</div>
+            <div style={{ fontSize: 11, color: "#888" }}>It will be added to your order automatically</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rec-banner" style={{ margin: "0 20px 20px", background: "linear-gradient(135deg, #fef3c7 0%, #fff5e0 100%)", borderRadius: 16, padding: 16, border: "1px solid #fde68a" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 20 }}>🎁</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#92400e" }}>Add ₹{remaining} more & get FREE {activeOffer.freeItemName || "dessert"}!</div>
+            <div style={{ fontSize: 11, color: "#a08a5c" }}>Do not miss out — you are so close!</div>
+          </div>
+        </div>
+        {activeOffer.suggestItemId && (
+          <button onClick={() => onAdd(activeOffer.suggestItemId, 1)} className="tap-btn" style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: "#e8a33d", color: "#1a1a2e", fontWeight: 700, fontSize: 12, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+            Add Now
+          </button>
+        )}
+      </div>
+      <div style={{ marginTop: 10, height: 4, background: "#fde68a", borderRadius: 2, overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${Math.min(100, (cartTotal / activeOffer.threshold) * 100)}%`, background: "#e8a33d", borderRadius: 2, transition: "width 0.5s ease" }} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // TableContent
 // ---------------------------------------------------------------------------
 function TableContent() {
@@ -309,8 +611,8 @@ function TableContent() {
   const [tableNo, setTableNo] = useState(tableParam ? parseInt(tableParam) : null);
   const [allOrdersRaw, setAllOrdersRaw] = useState([]);
   const [activeOrders, setActiveOrders] = useState([]);
-  // cart: { [lineId]: { itemId, qty, notes, spiceLevel } }
   const [cart, setCart] = useState({});
+  const [orderType, setOrderType] = useState("dine-in"); // "dine-in" | "takeaway"
   const [addingMore, setAddingMore] = useState(false);
   const [tick, setTick] = useState(0);
   const [profile, setProfile] = useState(null);
@@ -330,8 +632,14 @@ function TableContent() {
   const [splashLeaving, setSplashLeaving] = useState(false);
   const [detailItem, setDetailItem] = useState(null);
   const [ratingOrder, setRatingOrder] = useState(null);
-  const [vegFilter, setVegFilter] = useState("all"); // "all" | "veg" | "nonveg"
+  const [vegFilter, setVegFilter] = useState("all");
   const [promoBanner, setPromoBanner] = useState(null);
+  const [googleReviewLink, setGoogleReviewLink] = useState("");
+  const [spotlightMetric, setSpotlightMetric] = useState("mostLoved");
+  const [activeOffer, setActiveOffer] = useState(null);
+  const [exploreFilter, setExploreFilter] = useState("all");
+  const [showExploreFilter, setShowExploreFilter] = useState(false);
+  const [showWaiterModal, setShowWaiterModal] = useState(false);
 
   const heroScrollRef = useRef(null);
   const prevCartCountRef = useRef(0);
@@ -355,6 +663,27 @@ function TableContent() {
     if (!restaurantId) return;
     const unsub = onSnapshot(doc(db, "restaurants", restaurantId, "info", "promoBanner"), (snap) => {
       if (snap.exists()) setPromoBanner(snap.data());
+    });
+    return () => unsub();
+  }, [restaurantId]);
+
+  useEffect(() => {
+    if (!restaurantId) return;
+    const unsub = onSnapshot(doc(db, "restaurants", restaurantId, "info", "settings"), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setGoogleReviewLink(data.googleReviewLink || "");
+        setSpotlightMetric(data.spotlightMetric || "mostLoved");
+      }
+    });
+    return () => unsub();
+  }, [restaurantId]);
+
+  useEffect(() => {
+    if (!restaurantId) return;
+    const unsub = onSnapshot(doc(db, "restaurants", restaurantId, "info", "activeOffer"), (snap) => {
+      if (snap.exists()) setActiveOffer(snap.data());
+      else setActiveOffer(null);
     });
     return () => unsub();
   }, [restaurantId]);
@@ -385,8 +714,6 @@ function TableContent() {
     return () => unsub();
   }, [restaurantId]);
 
-  // Order listener — tracks ALL orders for this table (not just active) so we
-  // can detect the "just became paid" transition for the rating popup.
   useEffect(() => {
     if (!tableNo || !restaurantId) return;
     const q = query(collection(db, "restaurants", restaurantId, "orders"), where("table", "==", tableNo));
@@ -401,7 +728,6 @@ function TableContent() {
     return () => unsub();
   }, [tableNo, restaurantId]);
 
-  // Detect status changes for toast + detect "paid" transition for rating popup
   useEffect(() => {
     const prev = prevActiveOrdersRef.current;
     activeOrders.forEach((o) => {
@@ -501,6 +827,20 @@ function TableContent() {
     ? availableItems.filter((m) => m.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
     : [];
 
+  // Which single item gets the big spotlight card, based on the receptionist's
+  // chosen metric — falls back sensibly if nothing is flagged yet.
+  const spotlightItem = useMemo(() => {
+    const flagKey = spotlightMetric === "mostOrdered" ? "mostOrdered" : spotlightMetric === "mostRated" ? "mostRated" : "mostLoved";
+    const flagged = availableItems.filter((m) => m[flagKey]);
+    if (flagged.length > 0) {
+      return [...flagged].sort((a, b) => (b.averageRating || 0) - (a.averageRating || 0))[0];
+    }
+    const featured = availableItems.find((m) => m.featured);
+    if (featured) return featured;
+    const rated = [...availableItems].filter((m) => m.averageRating).sort((a, b) => b.averageRating - a.averageRating);
+    return rated[0] || null;
+  }, [availableItems, spotlightMetric]);
+
   function findItem(id) { return menuItems.find((m) => m.id === id); }
 
   function addToCart(itemId, qty, customization = null) {
@@ -536,6 +876,17 @@ function TableContent() {
     setTimeout(() => setSuccessOverlay(null), 1600);
   }
 
+  async function callWaiter(reason) {
+    if (!restaurantId || !tableNo) return;
+    await addDoc(collection(db, "restaurants", restaurantId, "waiterCalls"), {
+      table: tableNo,
+      reason,
+      status: "pending",
+      createdAt: Date.now(),
+    });
+    playTone(600, 100, "triangle");
+  }
+
   async function submitCart() {
     const items = Object.values(cart).map((line) => {
       const item = findItem(line.itemId);
@@ -543,10 +894,22 @@ function TableContent() {
     });
     if (items.length === 0) return;
 
+    let finalItems = [...items];
+    if (activeOffer?.active && activeOffer.autoApply) {
+      const cartTotal = items.reduce((sum, it) => sum + it.price * it.qty, 0);
+      if (cartTotal >= (activeOffer.threshold || 0) && activeOffer.freeItemId) {
+        const freeItem = findItem(activeOffer.freeItemId);
+        if (freeItem) {
+          finalItems.push({ name: freeItem.name, qty: 1, price: 0, notes: `FREE — ${activeOffer.name || "Offer"}`, spiceLevel: null, isFree: true });
+        }
+      }
+    }
+
     await addDoc(collection(db, "restaurants", restaurantId, "orders"), {
       table: tableNo,
-      items,
+      items: finalItems,
       status: "pending",
+      orderType,
       isVIP: !!currentTableDoc?.isVIP,
       etaMinutes: null,
       preparingAt: null,
@@ -554,10 +917,12 @@ function TableContent() {
     });
 
     setCart({});
+    setOrderType("dine-in");
     setShowCartSummary(false);
     setAddingMore(false);
     setScreen("menu");
-    triggerSuccessOverlay(activeOrders.length > 0 ? "Added to your order!" : "Order placed!");
+    const placedMsg = orderType === "takeaway" ? "Order placed for pickup!" : "Order placed!";
+    triggerSuccessOverlay(activeOrders.length > 0 ? "Added to your order!" : placedMsg);
   }
 
   async function requestBill() {
@@ -602,6 +967,21 @@ function TableContent() {
     return sum + (item ? item.price * l.qty : 0);
   }, 0);
 
+  const exploreItems = useMemo(() => {
+    let items = [...availableItems];
+    switch (exploreFilter) {
+      case "veg": items = items.filter((m) => m.foodType === "veg"); break;
+      case "nonveg": items = items.filter((m) => m.foodType === "nonveg"); break;
+      case "price-low": items.sort((a, b) => a.price - b.price); break;
+      case "price-high": items.sort((a, b) => b.price - a.price); break;
+      case "most-loved": items = items.filter((m) => m.mostLoved).sort((a, b) => (b.averageRating || 0) - (a.averageRating || 0)); break;
+      case "most-ordered": items = items.filter((m) => m.mostOrdered).sort((a, b) => (b.orderCount || 0) - (a.orderCount || 0)); break;
+      case "most-rated": items = items.filter((m) => m.mostRated).sort((a, b) => (b.reviewCount || 0) - (a.reviewCount || 0)); break;
+      default: break;
+    }
+    return items;
+  }, [availableItems, exploreFilter]);
+
   const statusWords = {
     pending: "Sent to the counter", confirmed: "Confirmed — heading to kitchen", preparing: "Being cooked",
     ready: "Ready — on its way to your table", served: "Served. Enjoy!", bill_requested: "Bill Requested", billed: "Awaiting payment",
@@ -626,10 +1006,21 @@ function TableContent() {
   const cartSummaryModal = showCartSummary ? (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setShowCartSummary(false)}>
       <div style={{ background: "#fff", borderRadius: "24px 24px 0 0", width: "100%", maxWidth: 480, maxHeight: "80vh", overflow: "auto", padding: 24, animation: "slideUp 0.3s ease" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <h3 style={{ fontSize: 20, fontWeight: 800 }}>Your Cart</h3>
           <button onClick={() => setShowCartSummary(false)} style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: "#888" }}>×</button>
         </div>
+
+        <div style={{ display: "flex", gap: 8, background: "#f8f6f3", borderRadius: 12, padding: 4, marginBottom: 18 }}>
+          {[["dine-in", "🍽️ Dine-in"], ["takeaway", "📦 Takeaway"]].map(([val, label]) => (
+            <button key={val} onClick={() => setOrderType(val)} className="tap-btn"
+              style={{ flex: 1, padding: "10px", borderRadius: 9, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13,
+                background: orderType === val ? "#1a1a2e" : "transparent", color: orderType === val ? "#fff" : "#888" }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         {Object.entries(cart).map(([lineId, line]) => {
           const item = findItem(line.itemId);
           if (!item) return null;
@@ -656,7 +1047,7 @@ function TableContent() {
           <span>Total</span><span>₹{total}</span>
         </div>
         <button onClick={submitCart} className="tap-btn" style={{ width: "100%", marginTop: 20, padding: 16, borderRadius: 14, border: "none", background: "#e8a33d", color: "#1a1a2e", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
-          {activeOrders.length > 0 ? "Add to Order" : "Place Order"}
+          {activeOrders.length > 0 ? "Add to Order" : (orderType === "takeaway" ? "Place Takeaway Order" : "Place Order")}
         </button>
       </div>
     </div>
@@ -737,7 +1128,7 @@ function TableContent() {
     const billSubtotal = o.items.reduce((sum, it) => sum + it.price * it.qty, 0);
     return (
       <div style={{ minHeight: "100vh", background: "#f8f6f3", padding: 24, fontFamily: "sans-serif" }}>
-        {ratingOrder && <RatingPopup order={ratingOrder} restaurantId={restaurantId} onDone={() => setRatingOrder(null)} />}
+        {ratingOrder && <RatingPopup order={ratingOrder} restaurantId={restaurantId} onDone={() => setRatingOrder(null)} googleReviewLink={googleReviewLink} />}
         <div style={{ maxWidth: 480, margin: "0 auto" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
             {profile?.logoUrl && (<img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }} />)}
@@ -810,7 +1201,7 @@ function TableContent() {
       <div style={{ minHeight: "100vh", background: "#f8f6f3", padding: 24, fontFamily: "sans-serif", paddingBottom: 100 }}>
         {statusToast && <StatusToast emoji={statusToast.emoji} msg={statusToast.msg} />}
         {successOverlay && <SuccessOverlay message={successOverlay} />}
-        {ratingOrder && <RatingPopup order={ratingOrder} restaurantId={restaurantId} onDone={() => setRatingOrder(null)} />}
+        {ratingOrder && <RatingPopup order={ratingOrder} restaurantId={restaurantId} onDone={() => setRatingOrder(null)} googleReviewLink={googleReviewLink} />}
         <div style={{ maxWidth: 480, margin: "0 auto" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
             {profile?.logoUrl && (<img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }} />)}
@@ -829,7 +1220,10 @@ function TableContent() {
             return (
               <div key={o.id} style={{ background: "#fff", borderRadius: 16, padding: 20, marginBottom: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.04)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>Order · {new Date(o.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>
+                    Order · {new Date(o.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    {o.orderType === "takeaway" && <span style={{ marginLeft: 8, fontSize: 10.5, background: "#1a1a2e", color: "#fff", padding: "2px 8px", borderRadius: 100, fontWeight: 800 }}>📦 TAKEAWAY</span>}
+                  </span>
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: "#e8a33d" }}>{statusWords[o.status] || o.status}</span>
                 </div>
                 {countdown && o.status === "preparing" && <div style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, color: "#e8a33d", marginBottom: 10 }}>{countdown}</div>}
@@ -892,25 +1286,49 @@ function TableContent() {
     );
   }
 
-  // ---------- MENU ----------
+  // ---------- MAIN MENU SCREEN ----------
   return (
     <div style={{ minHeight: "100vh", background: "#fff", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", paddingBottom: 100 }}>
       <style jsx>{` .hscroll::-webkit-scrollbar { display: none; } `}</style>
       {successOverlay && <SuccessOverlay message={successOverlay} />}
       {detailItem && <ItemDetailModal item={detailItem} onClose={() => setDetailItem(null)} onAdd={addToCart} />}
-      {ratingOrder && <RatingPopup order={ratingOrder} restaurantId={restaurantId} onDone={() => setRatingOrder(null)} />}
+      {ratingOrder && <RatingPopup order={ratingOrder} restaurantId={restaurantId} onDone={() => setRatingOrder(null)} googleReviewLink={googleReviewLink} />}
+      {showWaiterModal && <WaiterModal onClose={() => setShowWaiterModal(false)} onSend={callWaiter} />}
 
-      {/* Header: logo + search bar in one row (Domino's-style, minus notif/cart icons) */}
+      {/* ===== HEADER: Call Waiter (top-left) · Logo/name · Table pill (top-right) ===== */}
       <div style={{ background: "linear-gradient(135deg, #fff5e0 0%, #fef3c7 100%)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ maxWidth: 480, margin: "0 auto", padding: "16px 20px 14px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            {profile?.logoUrl ? (
-              <img src={profile.logoUrl} alt="logo" style={{ width: 44, height: 44, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} />
-            ) : (
-              <div style={{ width: 44, height: 44, borderRadius: 12, background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", color: "#e8a33d", fontWeight: 800, fontSize: 17, flexShrink: 0 }}>
-                {profile?.name?.charAt(0) || "T"}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+              <button onClick={() => { playTone(500, 60); setShowWaiterModal(true); }} className="tap-btn" aria-label="Call Waiter"
+                style={{ width: 38, height: 38, borderRadius: "50%", border: "none", background: "#1a1a2e", color: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 2px 8px rgba(26,26,46,0.25)" }}>
+                🛎️
+              </button>
+              {profile?.logoUrl ? (
+                <img src={profile.logoUrl} alt="logo" style={{ width: 40, height: 40, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />
+              ) : (
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", color: "#e8a33d", fontWeight: 800, fontSize: 16, flexShrink: 0 }}>
+                  {profile?.name?.charAt(0) || "T"}
+                </div>
+              )}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 17, color: "#1a1a2e", textTransform: "uppercase", letterSpacing: 0.3, lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile?.name || "Menu"}</div>
+                {profile?.tagline ? (
+                  <div style={{ fontSize: 10.5, color: "#a08a5c", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile.tagline}</div>
+                ) : (
+                  <div style={{ fontSize: 11, color: "#a08a5c", fontWeight: 600 }}>📍 Table {tableNo}</div>
+                )}
               </div>
-            )}
+            </div>
+
+            <span style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.7)", padding: "6px 12px", borderRadius: 100, fontSize: 12.5, fontWeight: 700, color: "#1a1a2e", flexShrink: 0 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#dc2626", flexShrink: 0 }} />
+              Table {tableNo}
+            </span>
+          </div>
+
+          {/* Search bar + Veg filter */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
               <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 15, color: "#aaa" }}>🔍</span>
               <input
@@ -919,24 +1337,20 @@ function TableContent() {
                 style={{ width: "100%", padding: "11px 14px 11px 40px", borderRadius: 14, border: "none", background: "rgba(255,255,255,0.75)", fontSize: 13.5, outline: "none", boxSizing: "border-box", color: "#1a1a2e" }}
               />
             </div>
-            <div style={{ display: "flex", gap: 4, flexShrink: 0, background: "rgba(255,255,255,0.65)", borderRadius: 100, padding: 3 }}>
-              {["all", "veg", "nonveg"].map((f) => (
-                <button key={f} onClick={() => { playTone(500, 50); setVegFilter(f); }}
-                  style={{ width: 26, height: 26, borderRadius: "50%", border: "none", cursor: "pointer", fontSize: 10, fontWeight: 800,
-                    background: vegFilter === f ? (f === "veg" ? "#16a34a" : f === "nonveg" ? "#dc2626" : "#1a1a2e") : "transparent",
-                    color: vegFilter === f ? "#fff" : "#888" }}
-                  title={f === "all" ? "All" : f === "veg" ? "Veg only" : "Non-veg only"}>
-                  {f === "all" ? "A" : f === "veg" ? "V" : "N"}
-                </button>
-              ))}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, background: "rgba(255,255,255,0.65)", borderRadius: 100, padding: "5px 10px 5px 12px" }}>
+              <span style={{ fontSize: 13 }}>🌿</span>
+              <div style={{ display: "flex", gap: 3 }}>
+                {["all", "veg", "nonveg"].map((f) => (
+                  <button key={f} onClick={() => { playTone(500, 50); setVegFilter(f); }}
+                    style={{ padding: "5px 9px", borderRadius: 100, border: "none", cursor: "pointer", fontSize: 10.5, fontWeight: 800,
+                      background: vegFilter === f ? (f === "veg" ? "#16a34a" : f === "nonveg" ? "#dc2626" : "#1a1a2e") : "transparent",
+                      color: vegFilter === f ? "#fff" : "#888" }}>
+                    {f === "all" ? "All" : f === "veg" ? "Veg" : "Non-veg"}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-
-          <div style={{ marginTop: 10, display: "flex", alignItems: "baseline", gap: 8 }}>
-            <div style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 20, color: "#1a1a2e", textTransform: "uppercase", letterSpacing: 0.3 }}>{profile?.name || "Menu"}</div>
-            <div style={{ fontSize: 11.5, color: "#a08a5c", fontWeight: 600 }}>📍 Table {tableNo}</div>
-          </div>
-          {profile?.tagline && <div style={{ fontSize: 11.5, color: "#a08a5c", marginTop: 2 }}>{profile.tagline}</div>}
 
           {addingMore && (
             <button onClick={() => { playTone(440, 70); setAddingMore(false); setCart({}); setScreen("menu"); }} className="tap-btn" style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 13, fontWeight: 600, marginTop: 10, padding: 0 }}>← Back to order status</button>
@@ -958,19 +1372,13 @@ function TableContent() {
           </div>
         ) : (
           <>
+            {/* ===== HERO BANNER: Image ONLY ===== */}
             {heroItems.length > 0 && !addingMore && (
               <div style={{ padding: "16px 20px 0" }}>
                 <div ref={heroScrollRef} onScroll={handleHeroScroll} className="hscroll" style={{ display: "flex", overflowX: "auto", scrollSnapType: "x mandatory", borderRadius: 20, WebkitOverflowScrolling: "touch", scrollbarWidth: "none" }}>
                   {heroItems.map((item) => (
-                    <div key={item.id} style={{ flex: "0 0 100%", scrollSnapAlign: "start", position: "relative", aspectRatio: "5 / 4", background: "#1a1a2e" }}>
-                      <img src={item.imageUrl} alt={item.name} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7 }} />
-                      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", background: "linear-gradient(transparent, rgba(0,0,0,0.7))" }}>
-                        <div style={{ padding: 20, width: "100%" }}>
-                          <div style={{ color: "#fff", fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{item.name}</div>
-                          <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13, marginBottom: 10 }}>{item.description || "Chef's special pick"}</div>
-                          <button onClick={() => { playTone(680, 90, "triangle"); addToCart(item.id, 1); setShowCartSummary(true); }} className="tap-btn" style={{ padding: "8px 20px", borderRadius: 50, border: "none", background: "#e8a33d", color: "#1a1a2e", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Order Now →</button>
-                        </div>
-                      </div>
+                    <div key={item.id} style={{ flex: "0 0 100%", scrollSnapAlign: "start", position: "relative", aspectRatio: "16 / 9", background: "#1a1a2e", overflow: "hidden" }}>
+                      <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     </div>
                   ))}
                 </div>
@@ -982,7 +1390,7 @@ function TableContent() {
               </div>
             )}
 
-            {/* Circular category tiles */}
+            {/* ===== CATEGORY PILLS (circular, unchanged) ===== */}
             <div style={{ padding: "18px 20px 0" }}>
               <div className="hscroll" style={{ display: "flex", gap: 14, overflowX: "auto", paddingBottom: 8, scrollbarWidth: "none" }}>
                 {categories.map((cat) => {
@@ -1000,7 +1408,13 @@ function TableContent() {
               </div>
             </div>
 
-            <div style={{ padding: "18px 20px" }}>
+            {/* ===== SPOTLIGHT CARD: Most Loved / Most Ordered / Most Rated ===== */}
+            <div style={{ marginTop: 18 }}>
+              <SpotlightCard item={spotlightItem} metric={spotlightMetric} onAdd={addToCart} />
+            </div>
+
+            {/* ===== POPULAR PICKS (horizontal scroll) ===== */}
+            <div style={{ padding: "0 20px 18px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                 <h2 style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 19, color: "#1a1a2e", textTransform: "uppercase", letterSpacing: 0.3 }}>{activeCategory === "All" ? "Popular Picks" : activeCategory}</h2>
                 {activeCategory === "All" && availableItems.length > POPULAR_LIMIT && (
@@ -1026,31 +1440,67 @@ function TableContent() {
               )}
             </div>
 
-            {activeCategory === "All" && filteredItems.length > POPULAR_LIMIT && (
-              <div style={{ padding: "0 20px 24px" }}>
-                <h2 style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 19, color: "#1a1a2e", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 14 }}>More to Explore</h2>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
-                  {filteredItems.slice(POPULAR_LIMIT).map((it) => (<MenuCard key={it.id} item={it} qty={qtyForItem(it.id)} onAdd={() => addToCart(it.id, 1)} onOpenDetail={setDetailItem} />))}
-                </div>
-              </div>
+            {/* ===== SMART RECOMMENDATION BANNERS (when cart has items) ===== */}
+            {count > 0 && (
+              <>
+                <ThresholdBanner cartTotal={total} activeOffer={activeOffer} onAdd={addToCart} />
+                <CompleteMealBanner cart={cart} menuItems={menuItems} onAdd={addToCart} />
+                <PeopleAlsoOrderedBanner cart={cart} menuItems={menuItems} onAdd={addToCart} />
+              </>
             )}
 
-            {/* Promo banner — receptionist-set image + linked item, bottom of menu */}
+            {/* ===== PROMO BANNER (below Popular Picks, image only) ===== */}
             {promoBanner?.imageUrl && !addingMore && (
-              <div style={{ padding: "0 20px 30px" }}>
+              <div style={{ padding: "0 20px 24px" }}>
                 <div
                   onClick={() => {
                     if (promoBanner.linkedItemId) { addToCart(promoBanner.linkedItemId, 1); setShowCartSummary(true); }
                   }}
-                  style={{ position: "relative", borderRadius: 20, overflow: "hidden", cursor: promoBanner.linkedItemId ? "pointer" : "default", aspectRatio: "16/9" }}
+                  style={{ position: "relative", borderRadius: 20, overflow: "hidden", cursor: promoBanner.linkedItemId ? "pointer" : "default" }}
                 >
-                  <img src={promoBanner.imageUrl} alt="Special" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  <div style={{ position: "absolute", inset: 0, background: "linear-gradient(transparent, rgba(0,0,0,0.65))", display: "flex", alignItems: "flex-end", padding: 18 }}>
-                    <div style={{ color: "#fff", fontWeight: 800, fontSize: 15 }}>{promoBanner.title || "Exclusive Deal"}</div>
-                  </div>
+                  <img src={promoBanner.imageUrl} alt="Special" style={{ width: "100%", height: "auto", display: "block", borderRadius: 20 }} />
                 </div>
               </div>
             )}
+
+            {/* ===== MORE TO EXPLORE (ALL items with filter) ===== */}
+            <div style={{ padding: "0 20px 24px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <h2 style={{ fontFamily: DISPLAY_FONT, fontWeight: 400, fontSize: 19, color: "#1a1a2e", textTransform: "uppercase", letterSpacing: 0.3 }}>More to Explore</h2>
+                <div style={{ position: "relative" }}>
+                  <button onClick={() => setShowExploreFilter((s) => !s)} className="tap-btn" style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 100, border: "1px solid #e6e1d6", background: "#fff", fontSize: 12, fontWeight: 700, color: "#666", cursor: "pointer" }}>
+                    <span>🔽</span> Filter
+                  </button>
+                  {showExploreFilter && (
+                    <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: "#fff", borderRadius: 14, boxShadow: "0 8px 32px rgba(0,0,0,0.12)", border: "1px solid #f0f0f0", padding: 8, minWidth: 190, zIndex: 20 }}>
+                      {[
+                        { key: "all", label: "All Items" },
+                        { key: "veg", label: "🥬 Veg Only" },
+                        { key: "nonveg", label: "🍗 Non-veg Only" },
+                        { key: "price-low", label: "💰 Price: Low to High" },
+                        { key: "price-high", label: "💰 Price: High to Low" },
+                        { key: "most-loved", label: "🔥 Most Loved" },
+                        { key: "most-ordered", label: "🔥 Most Ordered" },
+                        { key: "most-rated", label: "⭐ Most Rated" },
+                      ].map((opt) => (
+                        <button key={opt.key} onClick={() => { setExploreFilter(opt.key); setShowExploreFilter(false); }}
+                          style={{ width: "100%", textAlign: "left", padding: "8px 12px", borderRadius: 8, border: "none", background: exploreFilter === opt.key ? "#fff5e0" : "transparent", color: exploreFilter === opt.key ? "#92400e" : "#666", fontSize: 13, fontWeight: exploreFilter === opt.key ? 700 : 600, cursor: "pointer" }}>
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {exploreItems.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 40, color: "#888" }}><div style={{ fontSize: 40, marginBottom: 12 }}>🍽️</div><p>No items match this filter.</p></div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
+                  {exploreItems.map((it) => (<MenuCard key={it.id} item={it} qty={qtyForItem(it.id)} onAdd={() => addToCart(it.id, 1)} onOpenDetail={setDetailItem} />))}
+                </div>
+              )}
+            </div>
           </>
         )}
       </div>
