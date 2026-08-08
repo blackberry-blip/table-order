@@ -322,6 +322,7 @@ function ReceptionPage() {
   const [profile, setProfile] = useState({ name: "", tagline: "", logoUrl: "", address: "" });
   const [profileForm, setProfileForm] = useState({ name: "", tagline: "", logoUrl: "", address: "" });
   const [savedMsg, setSavedMsg] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false); // profile card starts collapsed; opens on "Edit Profile"
   const [menuItems, setMenuItems] = useState([]);
   const [newItem, setNewItem] = useState({ name: "", description: "", price: "", category: "", imageUrl: "", chefSpecial: false, foodType: "veg" });
   const [editingId, setEditingId] = useState(null);
@@ -694,7 +695,7 @@ function ReceptionPage() {
   async function saveProfile() {
     await setDoc(doc(db, "restaurants", restaurantId, "info", "profile"), profileForm, { merge: true });
     setSavedMsg(true);
-    setTimeout(() => setSavedMsg(false), 2000);
+    setTimeout(() => { setSavedMsg(false); setEditingProfile(false); }, 900);
   }
   async function saveBilling() {
     await setDoc(doc(db, "restaurants", restaurantId, "info", "billing"), {
@@ -720,18 +721,47 @@ function ReceptionPage() {
       thresholdMostLoved: parseFloat(siteSettingsForm.thresholdMostLoved) || 4.5,
       thresholdMostOrdered: parseInt(siteSettingsForm.thresholdMostOrdered) || 100,
       thresholdMostRated: parseInt(siteSettingsForm.thresholdMostRated) || 50,
-    });
+    }, { merge: true }); // merge: true — this doc also holds googleReviewLink / spotlightMetric
     setSiteSettingsSaved(true);
     setTimeout(() => setSiteSettingsSaved(false), 2000);
   }
 
-  // items for a given order, normalized to include itemId for bundle-rule matching
-  function normalizedItems(order) {
-    return order.items.map((it) => ({ ...it, itemId: it.itemId || menuItems.find((m) => m.name === it.name)?.id || null }));
+  // Normalize a plain items array (not an order) to include itemId for bundle-rule
+  // matching. Takes an array so it can be reused when consolidating items across
+  // several merged-table orders into one bill, not just a single order's items.
+  function normalizedItems(items) {
+    return items.map((it) => ({ ...it, itemId: it.itemId || menuItems.find((m) => m.name === it.name)?.id || null }));
+  }
+
+  // Merge duplicate line items the same way table-side requestBill() does, so
+  // combining several tables' orders doesn't produce separate rows for the same dish.
+  function mergeItemLines(items) {
+    const map = {};
+    items.forEach((it) => {
+      const key = it.name + "|" + (it.notes || "") + "|" + (it.spiceLevel || "");
+      if (map[key]) map[key].qty += it.qty; else map[key] = { ...it };
+    });
+    return Object.values(map);
+  }
+
+  // Given the order the receptionist clicked "Generate Bill" on, work out every
+  // order that needs to be billed together — itself alone, unless its table is
+  // part of a merged group, in which case every bill_requested order across the
+  // whole group comes along so the party gets one consolidated bill.
+  function ordersForBilling(o) {
+    const t = tables.find((tb) => tb.number === o.table);
+    if (t && t.isMerged && t.mergedGroupId) {
+      const groupTableNumbers = tables.filter((tb) => tb.mergedGroupId === t.mergedGroupId).map((tb) => tb.number);
+      const grouped = orders.filter((ord) => ord.status === "bill_requested" && groupTableNumbers.includes(ord.table));
+      if (grouped.length > 0) return grouped;
+    }
+    return [o];
   }
 
   async function generateBill(o, withQr = false) {
-    const items = normalizedItems(o);
+    const ordersToBill = ordersForBilling(o);
+    const rawItems = mergeItemLines(ordersToBill.flatMap((ord) => ord.items));
+    const items = normalizedItems(rawItems);
     const subtotal = items.reduce((sum, it) => sum + it.price * it.qty, 0);
     const bundleDiscounts = computeBundleDiscounts(items, menuItems, bundleRules);
     const discountTotal = bundleDiscounts.reduce((s, d) => s + d.amount, 0);
@@ -743,27 +773,40 @@ function ReceptionPage() {
       ? `upi://pay?pa=${encodeURIComponent(billing.upiId)}&pn=${encodeURIComponent(profile.name || "Restaurant")}&am=${grandTotal}&cu=INR`
       : null;
 
-    await updateDoc(doc(db, "restaurants", restaurantId, "orders", o.id), {
-      status: "billed", billSubtotal: subtotal, billDiscounts: bundleDiscounts, billDiscountTotal: discountTotal,
+    const billPayload = {
+      status: "billed", items: rawItems, billSubtotal: subtotal, billDiscounts: bundleDiscounts, billDiscountTotal: discountTotal,
       billTaxPercent: billing.taxPercent || 0, billTaxAmount: taxAmount,
       billServicePercent: billing.servicePercent || 0, billServiceAmount: serviceAmount, billTotal: grandTotal,
       paymentQrUrl: upiLink ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(upiLink)}` : null,
-    });
+      mergedTables: ordersToBill.length > 1 ? ordersToBill.map((ord) => ord.table) : null,
+    };
+    // Every order in the group gets the SAME consolidated bill written onto it —
+    // that way each table's own device (each listens only to its own table number)
+    // shows the identical, correct final bill, not just whichever table reception
+    // happened to click "Generate Bill" on.
+    const batch = writeBatch(db);
+    ordersToBill.forEach((ord) => batch.update(doc(db, "restaurants", restaurantId, "orders", ord.id), billPayload));
+    await batch.commit();
   }
 
   async function markPaid(id) {
-    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "paid" });
-    // auto-clear a merged table group once its bill is paid
     const order = orders.find((o) => o.id === id);
-    if (order) {
-      const t = tables.find((tb) => tb.number === order.table);
-      if (t && t.isMerged) {
-        const groupTables = tables.filter((tb) => tb.mergedGroupId === t.mergedGroupId);
-        const batch = writeBatch(db);
-        groupTables.forEach((tb) => batch.update(doc(db, "restaurants", restaurantId, "tables", tb.id), { mergedGroupId: null, mergedWith: [], isMerged: false }));
-        await batch.commit();
-      }
+    if (!order) return;
+    const t = tables.find((tb) => tb.number === order.table);
+    if (t && t.isMerged && t.mergedGroupId) {
+      // Cascade "paid" across every billed order in the merged group (staff only
+      // need to tap Mark Paid once, on any one of the group's duplicate cards),
+      // and clear the merge flags on all tables in the group.
+      const groupTableNumbers = tables.filter((tb) => tb.mergedGroupId === t.mergedGroupId).map((tb) => tb.number);
+      const siblingBilled = orders.filter((o) => o.status === "billed" && groupTableNumbers.includes(o.table));
+      const groupTables = tables.filter((tb) => tb.mergedGroupId === t.mergedGroupId);
+      const batch = writeBatch(db);
+      siblingBilled.forEach((o) => batch.update(doc(db, "restaurants", restaurantId, "orders", o.id), { status: "paid" }));
+      groupTables.forEach((tb) => batch.update(doc(db, "restaurants", restaurantId, "tables", tb.id), { mergedGroupId: null, mergedWith: [], isMerged: false }));
+      await batch.commit();
+      return;
     }
+    await updateDoc(doc(db, "restaurants", restaurantId, "orders", id), { status: "paid" });
   }
 
   function printBill(o) {
@@ -1408,7 +1451,7 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
         </div>
         <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
           {waiterCalls.slice(0, 8).map((c) => {
-            const reason = WAITER_REASONS.find((r) => r.key === c.reason) || { icon: "✋", label: c.reason };
+            const reason = WAITER_REASONS.find((r) => r.label === c.reason) || { icon: "✋", label: c.reason };
             return (
               <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderRadius: 10, background: c.status === "pending" ? "#fef2f2" : "var(--surface-2, #f3efe6)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1438,7 +1481,24 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
     if (dashboardView === "items") return renderItemsSoldAnalytics();
 
     const currentSection = ORDER_SECTIONS.find((s) => s.key === orderFilter);
-    const currentData = orderDataByKey[orderFilter] || [];
+    // For "billed", collapse a merged group's duplicate per-table bills into one
+    // display card — they carry the same consolidated total (see generateBill).
+    let currentData = orderDataByKey[orderFilter] || [];
+    let billedTableLabels = {};
+    if (orderFilter === "billed") {
+      const seenGroups = new Set();
+      const deduped = [];
+      billed.forEach((o) => {
+        const t = tables.find((tb) => tb.number === o.table);
+        const groupKey = t && t.isMerged && t.mergedGroupId ? t.mergedGroupId : `single-${o.id}`;
+        if (seenGroups.has(groupKey)) return;
+        seenGroups.add(groupKey);
+        const tableNumbers = o.mergedTables && o.mergedTables.length > 0 ? o.mergedTables : [o.table];
+        billedTableLabels[o.id] = tableNumbers.join(" + ");
+        deduped.push(o);
+      });
+      currentData = deduped;
+    }
 
     return (
       <div>
@@ -1509,7 +1569,7 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
                 {orderFilter === "billed" && currentData.map((o) => (
                   <div key={o.id} className="card" style={{ padding: 16, borderRadius: 14 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                      <span style={{ fontWeight: 700 }}>Table {o.table}</span>
+                      <span style={{ fontWeight: 700 }}>Table {billedTableLabels[o.id] || o.table}</span>
                       <span className="badge badge-billed">billed</span>
                     </div>
                     {o.items.map((it, i) => (
@@ -1600,8 +1660,11 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10, maxHeight: 440, overflowY: "auto" }}>
               {posItems.map((item) => (
-                <div key={item.id} className="card" style={{ padding: 10, borderRadius: 12, textAlign: "center" }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2 }}>{item.name}</div>
+                <div key={item.id} className="card" style={{ padding: 10, borderRadius: 12, textAlign: "center", overflow: "hidden" }}>
+                  <div style={{ width: "100%", aspectRatio: "1 / 1", borderRadius: 10, overflow: "hidden", marginBottom: 8, background: "var(--surface-2, #f3efe6)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {item.imageUrl ? <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 26 }}>🍽️</span>}
+                  </div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
                   <div style={{ fontSize: 12, color: "#e8a33d", fontWeight: 800, marginBottom: 8 }}>₹{item.price}</div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                     <button onClick={() => posRemoveItem(item)} className="btn btn-sm btn-ghost" style={{ width: 28, padding: 0 }}>-</button>
@@ -1619,6 +1682,12 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
             <h3 style={{ fontSize: 14.5, fontWeight: 800, marginBottom: 10 }}>
               {posOrderType === "takeaway" ? "📦 Takeaway Order" : posTable ? `Table ${posTable}` : "Select a table"}
             </h3>
+            {posOrderType !== "takeaway" && (
+              <select value={posTable || ""} onChange={(e) => setPosTable(e.target.value ? parseInt(e.target.value, 10) : null)} style={{ ...inputStyle, marginBottom: 14 }}>
+                <option value="">Select table</option>
+                {tables.map((t) => <option key={t.id} value={t.number}>Table {t.number}</option>)}
+              </select>
+            )}
             {posLines.length === 0 ? (
               <p style={{ color: "#999", fontSize: 13 }}>Cart is empty.</p>
             ) : (
@@ -2200,7 +2269,7 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
                     <button className="btn btn-sm btn-ghost" onClick={() => deleteFloor(floor)} style={{ color: "#dc2626" }}>Delete Floor</button>
                   </div>
                 )}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
                   {floorTables.map((t) => {
                     const activeCount = orders.filter((o) => o.table === t.number && !["paid", "cancelled", "declined", "merged"].includes(o.status)).length;
                     const occupied = activeCount > 0;
@@ -2225,12 +2294,12 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
                               {t.isVIP ? "★ VIP Table" : "Mark as VIP"}
                             </button>
                           )}
-                          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                            <button onClick={(e) => { e.stopPropagation(); setQrModalTable(t); }} className="btn btn-sm btn-ghost" style={{ flex: 1 }}>Print QR</button>
+                          <div style={{ display: "grid", gridTemplateColumns: (!mergeMode && !t.isMerged) ? "repeat(3, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))", gap: 6, marginBottom: 8 }}>
+                            <button onClick={(e) => { e.stopPropagation(); setQrModalTable(t); }} className="btn btn-sm btn-ghost" style={{ minWidth: 0, padding: "8px 4px", fontSize: 12 }}>Print QR</button>
                             {!mergeMode && !t.isMerged && (
-                              <button onClick={(e) => { e.stopPropagation(); startMerge(t.id); }} className="btn btn-sm btn-ghost" style={{ flex: 1 }}>Merge</button>
+                              <button onClick={(e) => { e.stopPropagation(); startMerge(t.id); }} className="btn btn-sm btn-ghost" style={{ minWidth: 0, padding: "8px 4px", fontSize: 12 }}>Merge</button>
                             )}
-                            <button onClick={(e) => { e.stopPropagation(); deleteTable(t.id); }} className="btn btn-sm btn-ghost" style={{ flex: 1, color: "var(--danger, #dc2626)" }}>Delete</button>
+                            <button onClick={(e) => { e.stopPropagation(); deleteTable(t.id); }} className="btn btn-sm btn-ghost" style={{ minWidth: 0, padding: "8px 4px", fontSize: 12, color: "var(--danger, #dc2626)" }}>Delete</button>
                           </div>
                           {occupied && (
                             <button onClick={(e) => { e.stopPropagation(); freeTable(t.number); }} className="btn btn-sm" style={{ width: "100%", background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca" }}>
@@ -2255,35 +2324,44 @@ Chocolate Lava Cake,220,Desserts,Warm cake with molten chocolate center,veg,no,y
     <div>
       <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 24, fontFamily: "'Fraunces', serif" }}>Settings</h2>
 
-      {/* Flat full-width logo box */}
+      {/* Flat full-width logo box — collapsed by default; edit fields only open via "Edit Profile" */}
       <div className="card" style={{ borderRadius: 20, overflow: "hidden", marginBottom: 24 }}>
         <div style={{
           height: 180, position: "relative",
           background: profileForm.logoUrl ? `url(${profileForm.logoUrl}) center/cover` : "linear-gradient(135deg, #1a1a2e, #3a3a5e)",
         }}>
-          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(transparent 40%, rgba(0,0,0,0.75))", display: "flex", alignItems: "flex-end", padding: 24 }}>
-            <div>
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(transparent 40%, rgba(0,0,0,0.75))", display: "flex", alignItems: "flex-end", justifyContent: "space-between", padding: 24, gap: 12 }}>
+            <div style={{ minWidth: 0 }}>
               <h3 style={{ fontSize: 22, fontWeight: 800, color: "#fff", margin: 0, fontFamily: "'Fraunces', serif" }}>{profileForm.name || "Your Restaurant"}</h3>
               <p style={{ fontSize: 13.5, color: "rgba(255,255,255,0.85)", margin: "2px 0 0" }}>{profileForm.tagline || "Add a tagline to introduce your place"}</p>
+              {profileForm.address && <p style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", margin: "2px 0 0" }}>{profileForm.address}</p>}
+            </div>
+            {!editingProfile && (
+              <button onClick={() => setEditingProfile(true)} className="btn btn-sm" style={{ background: "rgba(255,255,255,0.15)", color: "#fff", border: "1px solid rgba(255,255,255,0.35)", flexShrink: 0 }}>Edit Profile</button>
+            )}
+          </div>
+        </div>
+        {editingProfile && (
+          <div style={{ padding: 28, maxWidth: 480, margin: "0 auto" }}>
+            <label style={labelStyle}>Restaurant Name</label>
+            <input value={profileForm.name || ""} onChange={(e) => setProfileForm((p) => ({ ...p, name: e.target.value }))} style={inputStyle} />
+            <label style={labelStyle}>Tagline / Slogan</label>
+            <input value={profileForm.tagline || ""} onChange={(e) => setProfileForm((p) => ({ ...p, tagline: e.target.value }))} style={inputStyle} />
+            <label style={labelStyle}>Address</label>
+            <input value={profileForm.address || ""} onChange={(e) => setProfileForm((p) => ({ ...p, address: e.target.value }))} style={inputStyle} />
+
+            <label style={labelStyle}>Logo / Banner Image</label>
+            <input ref={logoFileInputRef} type="file" accept="image/*" onChange={(e) => handleLogoUpload(e.target.files[0])} style={{ display: "none" }} />
+            <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
+              <button onClick={() => logoFileInputRef.current?.click()} disabled={logoUploading} className="btn btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>{logoUploading ? "Uploading..." : "Upload Image"}</button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => { setProfileForm(profile); setEditingProfile(false); }} style={{ flex: 1 }}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveProfile} style={{ flex: 2 }}>{savedMsg ? "Saved ✓" : "Save Profile"}</button>
             </div>
           </div>
-        </div>
-        <div style={{ padding: 28, maxWidth: 480, margin: "0 auto" }}>
-          <label style={labelStyle}>Restaurant Name</label>
-          <input value={profileForm.name || ""} onChange={(e) => setProfileForm((p) => ({ ...p, name: e.target.value }))} style={inputStyle} />
-          <label style={labelStyle}>Tagline / Slogan</label>
-          <input value={profileForm.tagline || ""} onChange={(e) => setProfileForm((p) => ({ ...p, tagline: e.target.value }))} style={inputStyle} />
-          <label style={labelStyle}>Address</label>
-          <input value={profileForm.address || ""} onChange={(e) => setProfileForm((p) => ({ ...p, address: e.target.value }))} style={inputStyle} />
-
-          <label style={labelStyle}>Logo / Banner Image</label>
-          <input ref={logoFileInputRef} type="file" accept="image/*" onChange={(e) => handleLogoUpload(e.target.files[0])} style={{ display: "none" }} />
-          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
-            <button onClick={() => logoFileInputRef.current?.click()} disabled={logoUploading} className="btn btn-ghost" style={{ border: "2px dashed var(--border, #e6e1d6)" }}>{logoUploading ? "Uploading..." : "Upload Image"}</button>
-          </div>
-
-          <button className="btn btn-primary" onClick={saveProfile} style={{ width: "100%" }}>{savedMsg ? "Saved ✓" : "Save Profile"}</button>
-        </div>
+        )}
       </div>
 
       {/* NEW: Subscription card */}

@@ -333,19 +333,26 @@ function WaiterModal({ onClose, onSend }) {
   const [customText, setCustomText] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const [error, setError] = useState(null);
 
   const canSend = selected && (selected !== "other" || customText.trim().length > 0);
 
   async function handleSend() {
     if (!canSend || sending) return;
     setSending(true);
+    setError(null);
     const reason = selected === "other"
       ? customText.trim()
       : WAITER_REASONS.find((r) => r.key === selected)?.label || "Assistance";
-    await onSend(reason);
-    setSending(false);
-    setSent(true);
-    setTimeout(onClose, 1700);
+    try {
+      await onSend(reason);
+      setSent(true);
+      setTimeout(onClose, 1700);
+    } catch (err) {
+      setError("Couldn't reach the kitchen — check your connection and try again.");
+    } finally {
+      setSending(false);
+    }
   }
 
   if (sent) {
@@ -390,6 +397,7 @@ function WaiterModal({ onClose, onSend }) {
           style={{ width: "100%", padding: 15, borderRadius: 14, border: "none", background: canSend ? "#1a1a2e" : "#eee", color: canSend ? "#fff" : "#aaa", fontWeight: 700, fontSize: 15, cursor: canSend ? "pointer" : "not-allowed" }}>
           {sending ? "Sending..." : "🛎️ Call Waiter"}
         </button>
+        {error && <div style={{ color: "#dc2626", fontSize: 12.5, fontWeight: 600, marginTop: 10, textAlign: "center" }}>{error}</div>}
       </div>
     </div>
   );
@@ -482,7 +490,7 @@ function StatusToast({ emoji, msg }) {
 // ---------------------------------------------------------------------------
 // Recommendation banners (unchanged logic from the previous pass)
 // ---------------------------------------------------------------------------
-function PeopleAlsoOrderedBanner({ cart, menuItems, onAdd }) {
+function PeopleAlsoOrderedBanner({ cart, menuItems, onAdd, compact }) {
   const cartItemIds = new Set(Object.values(cart).map((l) => l.itemId));
   const cartCategories = new Set();
   cartItemIds.forEach((id) => {
@@ -499,20 +507,20 @@ function PeopleAlsoOrderedBanner({ cart, menuItems, onAdd }) {
   if (suggestions.length === 0) return null;
 
   return (
-    <div className="rec-banner" style={{ margin: "0 20px 20px", background: "linear-gradient(135deg, #fef3c7 0%, #fff5e0 100%)", borderRadius: 16, padding: 16, border: "1px solid #fde68a" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
-        <span style={{ fontSize: 16 }}>👥</span>
-        <span style={{ fontSize: 13, fontWeight: 800, color: "#92400e" }}>People also ordered these</span>
+    <div className="rec-banner" style={{ margin: compact ? "0 0 12px" : "0 20px 20px", background: "linear-gradient(135deg, #fef3c7 0%, #fff5e0 100%)", borderRadius: compact ? 12 : 16, padding: compact ? 12 : 16, border: "1px solid #fde68a" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: compact ? 8 : 10 }}>
+        <span style={{ fontSize: compact ? 14 : 16 }}>👥</span>
+        <span style={{ fontSize: compact ? 12 : 13, fontWeight: 800, color: "#92400e" }}>People also ordered these</span>
       </div>
-      <div style={{ display: "flex", gap: 10, overflowX: "auto" }}>
+      <div style={{ display: "flex", gap: 8, overflowX: "auto" }}>
         {suggestions.map((item) => (
-          <div key={item.id} onClick={() => onAdd(item.id, 1)} className="tap-btn" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10, background: "#fff", borderRadius: 12, padding: "8px 12px", border: "1px solid #f0f0f0", cursor: "pointer", minWidth: 180 }}>
-            {item.imageUrl && <img src={item.imageUrl} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover" }} />}
+          <div key={item.id} onClick={() => onAdd(item.id, 1)} className="tap-btn" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8, background: "#fff", borderRadius: 10, padding: compact ? "6px 10px" : "8px 12px", border: "1px solid #f0f0f0", cursor: "pointer", minWidth: compact ? 150 : 180 }}>
+            {item.imageUrl && <img src={item.imageUrl} alt="" style={{ width: compact ? 32 : 40, height: compact ? 32 : 40, borderRadius: 8, objectFit: "cover" }} />}
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
-              <div style={{ fontSize: 11, color: "#e8a33d", fontWeight: 700 }}>₹{item.price}</div>
+              <div style={{ fontSize: compact ? 11 : 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
+              <div style={{ fontSize: compact ? 10 : 11, color: "#e8a33d", fontWeight: 700 }}>₹{item.price}</div>
             </div>
-            <span style={{ background: "#e8a33d", color: "#1a1a2e", fontSize: 16, fontWeight: 700, width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>+</span>
+            <span style={{ background: "#e8a33d", color: "#1a1a2e", fontSize: compact ? 14 : 16, fontWeight: 700, width: compact ? 24 : 28, height: compact ? 24 : 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>+</span>
           </div>
         ))}
       </div>
@@ -520,7 +528,7 @@ function PeopleAlsoOrderedBanner({ cart, menuItems, onAdd }) {
   );
 }
 
-function CompleteMealBanner({ cart, menuItems, onAdd }) {
+function CompleteMealBanner({ cart, menuItems, onAdd, compact }) {
   const cartItemIds = new Set(Object.values(cart).map((l) => l.itemId));
   const cartItems = menuItems.filter((m) => cartItemIds.has(m.id));
 
@@ -542,17 +550,17 @@ function CompleteMealBanner({ cart, menuItems, onAdd }) {
   if (!suggestion) return null;
 
   return (
-    <div className="rec-banner" style={{ margin: "0 20px 20px", background: "linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%)", borderRadius: 16, padding: 16, border: "1px solid #bbf7d0" }}>
+    <div className="rec-banner" style={{ margin: compact ? "0 0 12px" : "0 20px 20px", background: "linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%)", borderRadius: compact ? 12 : 16, padding: compact ? 12 : 16, border: "1px solid #bbf7d0" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
-          {suggestion.imageUrl && <img src={suggestion.imageUrl} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: "cover" }} />}
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "#166534" }}>🍽️ Complete your meal</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e", marginTop: 2 }}>{suggestion.name} — ₹{suggestion.price}</div>
-            <div style={{ fontSize: 11, color: "#888" }}>Pairs perfectly with what you ordered</div>
+        <div style={{ display: "flex", alignItems: "center", gap: compact ? 8 : 10, flex: 1, minWidth: 0 }}>
+          {suggestion.imageUrl && <img src={suggestion.imageUrl} alt="" style={{ width: compact ? 38 : 48, height: compact ? 38 : 48, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: compact ? 11 : 12, fontWeight: 800, color: "#166534" }}>🍽️ Complete your meal</div>
+            <div style={{ fontSize: compact ? 12 : 13, fontWeight: 600, color: "#1a1a2e", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{suggestion.name} — ₹{suggestion.price}</div>
+            {!compact && <div style={{ fontSize: 11, color: "#888" }}>Pairs perfectly with what you ordered</div>}
           </div>
         </div>
-        <button onClick={() => onAdd(suggestion.id, 1)} className="tap-btn" style={{ padding: "8px 16px", borderRadius: 10, border: "none", background: "#16a34a", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", flexShrink: 0 }}>
+        <button onClick={() => onAdd(suggestion.id, 1)} className="tap-btn" style={{ padding: compact ? "6px 12px" : "8px 16px", borderRadius: 10, border: "none", background: "#16a34a", color: "#fff", fontWeight: 700, fontSize: compact ? 12 : 13, cursor: "pointer", flexShrink: 0 }}>
           + Add
         </button>
       </div>
@@ -560,17 +568,17 @@ function CompleteMealBanner({ cart, menuItems, onAdd }) {
   );
 }
 
-function ThresholdBanner({ cartTotal, activeOffer, onAdd }) {
+function ThresholdBanner({ cartTotal, activeOffer, compact }) {
   if (!activeOffer || !activeOffer.active) return null;
   const remaining = (activeOffer.threshold || 0) - cartTotal;
   if (remaining <= 0) {
     return (
-      <div className="rec-banner" style={{ margin: "0 20px 20px", background: "linear-gradient(135deg, #ede9fe 0%, #f5f3ff 100%)", borderRadius: 16, padding: 16, border: "1px solid #ddd6fe" }}>
+      <div className="rec-banner" style={{ margin: compact ? "0 0 12px" : "0 20px 20px", background: "linear-gradient(135deg, #ede9fe 0%, #f5f3ff 100%)", borderRadius: compact ? 12 : 16, padding: compact ? 12 : 16, border: "1px solid #ddd6fe" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 20 }}>🎉</span>
+          <span style={{ fontSize: compact ? 16 : 20 }}>🎉</span>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "#6d28d9" }}>You unlocked a FREE {activeOffer.freeItemName || "treat"}!</div>
-            <div style={{ fontSize: 11, color: "#888" }}>It will be added to your order automatically</div>
+            <div style={{ fontSize: compact ? 12 : 13, fontWeight: 800, color: "#6d28d9" }}>You unlocked a FREE {activeOffer.freeItemName || "treat"}!</div>
+            <div style={{ fontSize: 11, color: "#888" }}>It'll be applied as a discount on your bill</div>
           </div>
         </div>
       </div>
@@ -578,22 +586,15 @@ function ThresholdBanner({ cartTotal, activeOffer, onAdd }) {
   }
 
   return (
-    <div className="rec-banner" style={{ margin: "0 20px 20px", background: "linear-gradient(135deg, #fef3c7 0%, #fff5e0 100%)", borderRadius: 16, padding: 16, border: "1px solid #fde68a" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 20 }}>🎁</span>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "#92400e" }}>Add ₹{remaining} more & get FREE {activeOffer.freeItemName || "dessert"}!</div>
-            <div style={{ fontSize: 11, color: "#a08a5c" }}>Do not miss out — you are so close!</div>
-          </div>
+    <div className="rec-banner" style={{ margin: compact ? "0 0 12px" : "0 20px 20px", background: "linear-gradient(135deg, #fef3c7 0%, #fff5e0 100%)", borderRadius: compact ? 12 : 16, padding: compact ? 12 : 16, border: "1px solid #fde68a" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: compact ? 16 : 20 }}>🎁</span>
+        <div>
+          <div style={{ fontSize: compact ? 12 : 13, fontWeight: 800, color: "#92400e" }}>Add ₹{remaining} more & get FREE {activeOffer.freeItemName || "dessert"}!</div>
+          {!compact && <div style={{ fontSize: 11, color: "#a08a5c" }}>Do not miss out — you are so close!</div>}
         </div>
-        {activeOffer.suggestItemId && (
-          <button onClick={() => onAdd(activeOffer.suggestItemId, 1)} className="tap-btn" style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: "#e8a33d", color: "#1a1a2e", fontWeight: 700, fontSize: 12, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
-            Add Now
-          </button>
-        )}
       </div>
-      <div style={{ marginTop: 10, height: 4, background: "#fde68a", borderRadius: 2, overflow: "hidden" }}>
+      <div style={{ marginTop: compact ? 8 : 10, height: 4, background: "#fde68a", borderRadius: 2, overflow: "hidden" }}>
         <div style={{ height: "100%", width: `${Math.min(100, (cartTotal / activeOffer.threshold) * 100)}%`, background: "#e8a33d", borderRadius: 2, transition: "width 0.5s ease" }} />
       </div>
     </div>
@@ -612,7 +613,7 @@ function TableContent() {
   const [allOrdersRaw, setAllOrdersRaw] = useState([]);
   const [activeOrders, setActiveOrders] = useState([]);
   const [cart, setCart] = useState({});
-  const [orderType, setOrderType] = useState("dine-in"); // "dine-in" | "takeaway"
+  const [orderType, setOrderType] = useState("dinein"); // "dinein" | "takeaway" — matches reception POS convention
   const [addingMore, setAddingMore] = useState(false);
   const [tick, setTick] = useState(0);
   const [profile, setProfile] = useState(null);
@@ -636,7 +637,7 @@ function TableContent() {
   const [promoBanner, setPromoBanner] = useState(null);
   const [googleReviewLink, setGoogleReviewLink] = useState("");
   const [spotlightMetric, setSpotlightMetric] = useState("mostLoved");
-  const [activeOffer, setActiveOffer] = useState(null);
+  const [bundleRules, setBundleRules] = useState([]); // Smart Deals — same collection reception manages
   const [exploreFilter, setExploreFilter] = useState("all");
   const [showExploreFilter, setShowExploreFilter] = useState(false);
   const [showWaiterModal, setShowWaiterModal] = useState(false);
@@ -681,10 +682,8 @@ function TableContent() {
 
   useEffect(() => {
     if (!restaurantId) return;
-    const unsub = onSnapshot(doc(db, "restaurants", restaurantId, "info", "activeOffer"), (snap) => {
-      if (snap.exists()) setActiveOffer(snap.data());
-      else setActiveOffer(null);
-    });
+    const q = query(collection(db, "restaurants", restaurantId, "bundleRules"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, (snap) => setBundleRules(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
     return () => unsub();
   }, [restaurantId]);
 
@@ -894,20 +893,13 @@ function TableContent() {
     });
     if (items.length === 0) return;
 
-    let finalItems = [...items];
-    if (activeOffer?.active && activeOffer.autoApply) {
-      const cartTotal = items.reduce((sum, it) => sum + it.price * it.qty, 0);
-      if (cartTotal >= (activeOffer.threshold || 0) && activeOffer.freeItemId) {
-        const freeItem = findItem(activeOffer.freeItemId);
-        if (freeItem) {
-          finalItems.push({ name: freeItem.name, qty: 1, price: 0, notes: `FREE — ${activeOffer.name || "Offer"}`, spiceLevel: null, isFree: true });
-        }
-      }
-    }
-
+    // Note: no free-item injection here. Threshold/bundle deals are computed
+    // once, at bill time, by reception's Smart Deals engine (bundleRules) —
+    // that's the single source of truth. The ThresholdBanner below is just an
+    // accurate preview of what the diner will see deducted from the bill.
     await addDoc(collection(db, "restaurants", restaurantId, "orders"), {
       table: tableNo,
-      items: finalItems,
+      items,
       status: "pending",
       orderType,
       isVIP: !!currentTableDoc?.isVIP,
@@ -917,7 +909,7 @@ function TableContent() {
     });
 
     setCart({});
-    setOrderType("dine-in");
+    setOrderType("dinein");
     setShowCartSummary(false);
     setAddingMore(false);
     setScreen("menu");
@@ -967,6 +959,19 @@ function TableContent() {
     return sum + (item ? item.price * l.qty : 0);
   }, 0);
 
+  // Which Smart Deal (if any) to surface in the ThresholdBanner — the next
+  // active thresholdFreeItem rule the diner hasn't unlocked yet, or if every
+  // active rule is already unlocked, the highest-value one (for the "you
+  // unlocked X" message). Same bundleRules collection reception manages.
+  const thresholdBannerOffer = useMemo(() => {
+    const active = bundleRules.filter((r) => r.type === "thresholdFreeItem" && r.active);
+    if (active.length === 0) return null;
+    const notYetMet = active.filter((r) => total < (r.threshold || 0)).sort((a, b) => a.threshold - b.threshold);
+    const chosen = notYetMet.length > 0 ? notYetMet[0] : [...active].sort((a, b) => b.threshold - a.threshold)[0];
+    const freeItem = menuItems.find((m) => m.id === chosen.freeItemId);
+    return { threshold: chosen.threshold, active: true, name: chosen.name, freeItemName: freeItem?.name || "item" };
+  }, [bundleRules, total, menuItems]);
+
   const exploreItems = useMemo(() => {
     let items = [...availableItems];
     switch (exploreFilter) {
@@ -990,7 +995,11 @@ function TableContent() {
   const bottomCartBar = (count > 0 || activeOrders.length > 0) ? (
     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: "1px solid #eee", padding: "12px 20px", zIndex: 50 }}>
       <button
-        onClick={() => { playTone(560, 70, "sine"); if (count > 0) setShowCartSummary(true); }}
+        onClick={() => {
+          playTone(560, 70, "sine");
+          if (count > 0) setShowCartSummary(true);
+          else if (addingMore) { setAddingMore(false); setCart({}); setScreen("menu"); }
+        }}
         className="tap-btn"
         style={{ width: "100%", maxWidth: 480, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: 14, borderRadius: 50, border: "none", background: "#1a1a2e", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}
       >
@@ -1012,7 +1021,7 @@ function TableContent() {
         </div>
 
         <div style={{ display: "flex", gap: 8, background: "#f8f6f3", borderRadius: 12, padding: 4, marginBottom: 18 }}>
-          {[["dine-in", "🍽️ Dine-in"], ["takeaway", "📦 Takeaway"]].map(([val, label]) => (
+          {[["dinein", "🍽️ Dine-in"], ["takeaway", "📦 Takeaway"]].map(([val, label]) => (
             <button key={val} onClick={() => setOrderType(val)} className="tap-btn"
               style={{ flex: 1, padding: "10px", borderRadius: 9, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13,
                 background: orderType === val ? "#1a1a2e" : "transparent", color: orderType === val ? "#fff" : "#888" }}>
@@ -1043,6 +1052,15 @@ function TableContent() {
             </div>
           );
         })}
+
+        {count > 0 && (
+          <div style={{ marginTop: 18 }}>
+            <ThresholdBanner cartTotal={total} activeOffer={thresholdBannerOffer} compact />
+            <CompleteMealBanner cart={cart} menuItems={menuItems} onAdd={addToCart} compact />
+            <PeopleAlsoOrderedBanner cart={cart} menuItems={menuItems} onAdd={addToCart} compact />
+          </div>
+        )}
+
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20, paddingTop: 16, borderTop: "2px solid #1a1a2e", fontSize: 18, fontWeight: 800 }}>
           <span>Total</span><span>₹{total}</span>
         </div>
@@ -1169,6 +1187,9 @@ function TableContent() {
               </div>
               <div style={{ padding: 20, background: "#f8f6f3" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6 }}><span style={{ color: "#888" }}>Subtotal</span><span>₹{o.billSubtotal ?? billSubtotal}</span></div>
+                {(o.billDiscounts || []).map((d, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6, color: "#16a34a" }}><span>🎁 {d.name}</span><span>-₹{d.amount}</span></div>
+                ))}
                 {o.billTaxAmount > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6, color: "#888" }}><span>Tax ({o.billTaxPercent}%)</span><span>₹{o.billTaxAmount}</span></div>}
                 {o.billServiceAmount > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6, color: "#888" }}><span>Service ({o.billServicePercent}%)</span><span>₹{o.billServiceAmount}</span></div>}
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 22, fontWeight: 800, marginTop: 10, paddingTop: 10, borderTop: "2px solid #1a1a2e" }}><span>Total</span><span>₹{o.billTotal ?? billSubtotal}</span></div>
@@ -1351,10 +1372,6 @@ function TableContent() {
               </div>
             </div>
           </div>
-
-          {addingMore && (
-            <button onClick={() => { playTone(440, 70); setAddingMore(false); setCart({}); setScreen("menu"); }} className="tap-btn" style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 13, fontWeight: 600, marginTop: 10, padding: 0 }}>← Back to order status</button>
-          )}
         </div>
       </div>
 
@@ -1439,15 +1456,6 @@ function TableContent() {
                 </div>
               )}
             </div>
-
-            {/* ===== SMART RECOMMENDATION BANNERS (when cart has items) ===== */}
-            {count > 0 && (
-              <>
-                <ThresholdBanner cartTotal={total} activeOffer={activeOffer} onAdd={addToCart} />
-                <CompleteMealBanner cart={cart} menuItems={menuItems} onAdd={addToCart} />
-                <PeopleAlsoOrderedBanner cart={cart} menuItems={menuItems} onAdd={addToCart} />
-              </>
-            )}
 
             {/* ===== PROMO BANNER (below Popular Picks, image only) ===== */}
             {promoBanner?.imageUrl && !addingMore && (
